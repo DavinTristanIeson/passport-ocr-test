@@ -90,17 +90,17 @@ export default class PassportOCR {
     dateOfIssue: {
       bbox: {
         x0: 0.320,
-        y0: 0.570,
+        y0: 0.600,
         x1: 0.630,
-        y1: 0.647,
+        y1: 0.660,
       },
     },
     dateofExpiry: {
       bbox: {
         x0: 0.630,
-        y0: 0.560,
+        y0: 0.600,
         x1: 0.960,
-        y1: 0.654,
+        y1: 0.660,
       },
     },
     regNumber: {
