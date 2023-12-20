@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Coordinates</title>
+  <script src="./src/coordinates.ts" type="module"></script>
+  <style>
+    .pos-mark {
+      font-size: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div>
+    <input type="file" id="visualizer_file" accept="image/*"/>
+  </div>
+  <div>
+    <p class="pos-mark">X: <span id="pos-x">0</span></p>
+    <p class="pos-mark">Y: <span id="pos-y">0</span></p>
+  </div>
+  <canvas id="visualizer">
+</body>
+</html>
