@@ -1,4 +1,4 @@
-import { type ImageLike, createScheduler, type Bbox, createWorker, Scheduler, RecognizeResult } from "tesseract.js";
+import { type ImageLike, createScheduler, type Bbox, createWorker, Scheduler, RecognizeResult, Word, Line } from "tesseract.js";
 import { distance } from 'fastest-levenshtein';
 import { OCRPreprocessMessageInput, OCRPreprocessMessageOutput } from "./preprocess.worker";
 
@@ -11,6 +11,18 @@ function getObjectUrlOfImageData(data: ImageData, width: number, height: number)
   return tempCanvas.toDataURL();
 }
 
+function runWorker<TInput, TOutput>(worker: Worker, input: TInput, transfer?: Transferable[]): Promise<TOutput> {
+  return new Promise<TOutput>((resolve, reject) => {
+    worker.onmessage = (e) => resolve(e.data as TOutput);
+    worker.onerror = reject;
+    worker.postMessage(input, transfer || []);
+  });
+}
+
+async function pause() {
+  await new Promise((resolve) => setTimeout(resolve, 3000));
+}
+
 type OCRTarget = {
   bbox: Bbox;
 }
@@ -19,133 +31,170 @@ type PassportOCRPayload = {
   [key in keyof typeof PassportOCR.targets]: string | null;
 };
 interface PassportOCROptions {
-  labelTolerance: number;
+  onProcessImage?: (objectUrl: string) => void | Promise<void>;
 }
 export default class PassportOCR {
   static targets = {
     type: {
       bbox: {
-        x0: 0.320,
-        y0: 0.175,
-        x1: 0.450,
-        y1: 0.240,
+        x0: 0.010,
+        y0: 0.080,
+        x1: 0.230,
+        y1: 0.150,
       },
     },
     countryCode: {
       bbox: {
-        x0: 0.470,
-        y0: 0.170,
-        x1: 0.700,
-        y1: 0.250
+        x0: 0.240,
+        y0: 0.080,
+        x1: 0.560,
+        y1: 0.150
       },
     },
     passportNumber: {
       bbox: {
-        x0: 0.760,
-        y0: 0.160,
+        x0: 0.670,
+        y0: 0.080,
         x1: 0.960,
-        y1: 0.260,
+        y1: 0.180,
       },
     },
     fullName: {
       bbox: {
-        x0: 0.320,
-        y0: 0.260,
-        x1: 0.630,
-        y1: 0.350,
+        x0: 0.010,
+        y0: 0.250,
+        x1: 0.780,
+        y1: 0.330,
       },
     },
     sex: {
       bbox: {
-        x0: 0.850,
-        y0: 0.260,
+        x0: 0.800,
+        y0: 0.250,
         x1: 0.960,
-        y1: 0.348,
+        y1: 0.330,
       },
     },
     nationality: {
       bbox: {
-        x0: 0.320,
-        y0: 0.362,
-        x1: 0.630,
-        y1: 0.456,
+        x0: 0.010,
+        y0: 0.400,
+        x1: 0.780,
+        y1: 0.480,
       },
     },
     dateOfBirth: {
       bbox: {
-        x0: 0.320,
-        y0: 0.466,
-        x1: 0.538,
-        y1: 0.553,
+        x0: 0.010,
+        y0: 0.565,
+        x1: 0.350,
+        y1: 0.645,
+      },
+    },
+    sex2: {
+      bbox: {
+        x0: 0.400,
+        y0: 0.565,
+        x1: 0.540,
+        y1: 0.645,
       },
     },
     placeOfBirth: {
       bbox: {
-        x0: 0.630,
-        y0: 0.462,
+        x0: 0.640,
+        y0: 0.565,
         x1: 0.960,
-        y1: 0.557
+        y1: 0.645
       },
     },
     dateOfIssue: {
       bbox: {
-        x0: 0.320,
-        y0: 0.600,
-        x1: 0.630,
-        y1: 0.660,
+        x0: 0.010,
+        y0: 0.725,
+        x1: 0.350,
+        y1: 0.805,
       },
     },
     dateofExpiry: {
       bbox: {
-        x0: 0.630,
-        y0: 0.600,
+        x0: 0.640,
+        y0: 0.565,
         x1: 0.960,
-        y1: 0.660,
+        y1: 0.805,
       },
     },
     regNumber: {
       bbox: {
-        x0: 0.320,
-        y0: 0.665,
-        x1: 0.630,
-        y1: 0.780,
+        x0: 0.010,
+        y0: 0.890,
+        x1: 0.500,
+        y1: 0.970,
       },
     },
     issuingOffice: {
       bbox: {
-        x0: 0.630,
-        y0: 0.665,
+        x0: 0.500,
+        y0: 0.890,
         x1: 0.960,
-        y1: 0.780,
+        y1: 0.970,
       },
     }
   } satisfies Record<string, OCRTarget>;
   canvas: HTMLCanvasElement;
   _scheduler: Scheduler | undefined;
   options: PassportOCROptions;
-  constructor(canvas: HTMLCanvasElement, options?: Partial<PassportOCROptions>) {
-    this.canvas = canvas;
+  constructor(options?: Partial<PassportOCROptions>) {
+    this.canvas = document.createElement("canvas");
     this.getScheduler();
     this.options = {
-      labelTolerance: Math.min(1, Math.max(0, options?.labelTolerance ?? 0.3)),
+      onProcessImage: options?.onProcessImage,
     };
+  }
+  private async debugImage(imageUrl?: string) {
+    if (this.options.onProcessImage) {
+      await this.options.onProcessImage(imageUrl || this.canvas.toDataURL());
+      await pause();
+    }
   }
   private async getScheduler(): Promise<Scheduler> {
     if (this._scheduler !== undefined) {
       return this._scheduler;
     }
     const WORKER_COUNT = 4;
-    this._scheduler = await createScheduler();
-    for (let i = 0; i < WORKER_COUNT; i++) {
-      this._scheduler.addWorker(await createWorker("ind"));
+    const scheduler = await createScheduler();
+    const workers = await Promise.all(Array.from({ length: WORKER_COUNT }, () => createWorker("ind")));
+    for (const worker of workers) {
+      scheduler.addWorker(worker);
     }
-    return this._scheduler;
+    this._scheduler = scheduler;
+    return scheduler;
   }
-  private get canvasContext(): CanvasRenderingContext2D {
+  get canvasContext(): CanvasRenderingContext2D {
     return this.canvas.getContext("2d", {
       willReadFrequently: true,
     })!;
   }
+  clearCanvas() {
+    this.canvasContext.clearRect(0, 0, this.canvas.width, this.canvas.height);
+  }
+  private static findWordsInLine(line: Line, words: string[]): Record<string, Word> {
+    const tracker = Object.create(null);
+    const insensitiveWords = words.map(word => word.toLowerCase());
+    for (let word of line.words) {
+      for (let matchWord of insensitiveWords) {
+        if (
+          !tracker[matchWord] &&
+          distance(word.text.toLowerCase(), matchWord.toLowerCase()) < Math.floor(matchWord.length / 2)) {
+          tracker[matchWord] = word;
+        }
+      }
+      if (Object.keys(tracker).length === words.length) {
+        break;
+      }
+    }
+    return tracker;
+  }
+
   async mountFile(file: File) {
     // https://stackoverflow.com/questions/32272904/converting-blob-file-data-to-imagedata-in-javascript
     const fileUrl = URL.createObjectURL(file);
@@ -163,20 +212,72 @@ export default class PassportOCR {
     ctx.drawImage(image, 0, 0);
     const imageData = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height)!;
 
+    const viewBoundary = await this.locateViewArea();
+    ctx.drawImage(image, 0, 0);
+
+    const viewWidth = viewBoundary.x1 - viewBoundary.x0;
+    const viewHeight = viewBoundary.y1 - viewBoundary.y0
+    const viewSection = ctx.getImageData(viewBoundary.x0, viewBoundary.y0, viewWidth, viewHeight);
+    this.canvas.width = viewWidth;
+    this.canvas.height = viewHeight;
+    ctx.putImageData(viewSection, 0, 0);
+    await this.debugImage();
+
     const worker = new Worker(new URL("./preprocess.worker.ts", import.meta.url), { type: 'module' });
-    const procImage = await new Promise<OCRPreprocessMessageOutput>((resolve, reject) => {
-      worker.onmessage = (e) => resolve(e.data);
-      worker.onerror = reject;
-      worker.postMessage({
-        width: this.canvas.width,
-        height: this.canvas.height,
-        data: imageData.data,
-      } satisfies OCRPreprocessMessageInput, [imageData.data.buffer]);
-    });
+    const procImage = await runWorker<OCRPreprocessMessageInput, OCRPreprocessMessageOutput>(worker, {
+      width: this.canvas.width,
+      height: this.canvas.height,
+      data: viewSection.data,
+    }, [viewSection.data.buffer]);
 
+    ctx.putImageData(new ImageData(procImage, this.canvas.width, this.canvas.height), 0, 0);
+    await this.debugImage();
+  }
+
+  private async locateViewArea(): Promise<Bbox> {
+    const scheduler = await this.getScheduler();
+    const ctx = this.canvasContext;
+
+    const imageData = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+    const worker = new Worker(new URL("./locator.worker.ts", import.meta.url), { type: 'module' });
+    const procImage = await runWorker<OCRPreprocessMessageInput, OCRPreprocessMessageOutput>(worker, {
+      width: imageData.width,
+      height: imageData.height,
+      data: imageData.data,
+    }, [imageData.data.buffer]);
+    const oldImageData = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
     ctx.putImageData(new ImageData(procImage, imageData.width, imageData.height), 0, 0);
+    const imageUrl = this.canvas.toDataURL();
+    await this.debugImage(imageUrl);
 
-    return this.canvas.toDataURL();
+    const result = await scheduler.addJob("recognize", imageUrl);
+    let republikWord: Word | undefined, indonesiaWord: Word | undefined;
+    for (const line of result.data.lines) {
+      const { republik, indonesia } = PassportOCR.findWordsInLine(line, ["republik", "indonesia"]);
+      if (republik && indonesia) {
+        republikWord = republik;
+        indonesiaWord = indonesia;
+        break;
+      }
+    }
+    if (!republikWord || !indonesiaWord) {
+      throw new Error("Cannot find passport");
+    }
+    const width = (indonesiaWord.bbox.x1 - republikWord.bbox.x0) * 1.4;
+    const height = (indonesiaWord.bbox.x1 - republikWord.bbox.x0) * 1.4;
+
+    const viewRect = {
+      x0: republikWord.bbox.x0 - (republikWord.bbox.x1 - republikWord.bbox.x0) * 0.1,
+      y0: indonesiaWord.bbox.y1 + (indonesiaWord.bbox.y1 - indonesiaWord.bbox.y0),
+      x1: indonesiaWord.bbox.x0 + width,
+      y1: republikWord.bbox.y0 + height,
+    }
+    ctx.strokeStyle = "green";
+    ctx.strokeRect(viewRect.x0, viewRect.y0, viewRect.x1 - viewRect.x0, viewRect.y1 - viewRect.y0);
+    await this.debugImage();
+    ctx.putImageData(oldImageData, 0, 0);
+
+    return viewRect;
   }
 
   private async readTarget(scheduler: Scheduler, target: OCRTarget, ctx: CanvasRenderingContext2D) {
@@ -188,8 +289,7 @@ export default class PassportOCR {
     const imageSectionUrl = getObjectUrlOfImageData(imageSection, width, height);
 
     const result = await scheduler.addJob("recognize", imageSectionUrl);
-    console.log(result.data);
-    return result.data.lines[0]?.text.trim() ?? null;
+    return result.data.lines[0] ?? null;
   }
   async run(): Promise<PassportOCRPayload> {
     const ctx = this.canvasContext;
@@ -197,8 +297,13 @@ export default class PassportOCR {
     const result = Object.fromEntries(await Promise.all(Object.entries(PassportOCR.targets).map(async (entry) => {
       return [entry[0], await this.readTarget(scheduler, entry[1], ctx)] as const;
     })));
-
-    return result as PassportOCRPayload;
+    if (
+      (!result.sex && result.sex2) ||
+      (result.sex && result.sex2 && result.sex.confidence < result.sex2.confidence)) {
+      result.sex = result.sex2;
+    }
+    delete result.sex2;
+    return Object.fromEntries(Object.entries(result).map(entry => [entry[0], entry[1]?.text.trim()])) as PassportOCRPayload;
   }
 
   async terminate() {

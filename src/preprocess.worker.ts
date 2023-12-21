@@ -5,6 +5,21 @@ export interface OCRPreprocessMessageInput {
 }
 export type OCRPreprocessMessageOutput = Uint8ClampedArray;
 
+
+function brightnessOf(data: Uint8ClampedArray): number {
+  const RED_INTENCITY_COEF = 0.2126;
+  const GREEN_INTENCITY_COEF = 0.7152;
+  const BLUE_INTENCITY_COEF = 0.0722;
+  let brightnessSum = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const R = data[i] * RED_INTENCITY_COEF;
+    const G = data[i + 1] * GREEN_INTENCITY_COEF;
+    const B = data[i + 2] * BLUE_INTENCITY_COEF;
+    brightnessSum += Math.min(255, Math.max(0, R + G + B));
+  }
+  return brightnessSum / ((data.length / 4) * 255);
+}
+
 function grayscale(data: Uint8ClampedArray) {
   // Original: 0.2126
   const RED_INTENCITY_COEF = 0.5;
@@ -27,8 +42,8 @@ function grayscale(data: Uint8ClampedArray) {
 }
 
 function binarize(data: Uint8ClampedArray): Uint8ClampedArray {
-  const UPPER_THRESHOLD = 64;
-  const LOWER_THRESHOLD = 32;
+  const UPPER_THRESHOLD = 128;
+  const LOWER_THRESHOLD = 64;
   for (let i = 0; i < data.length; i++) {
     if (data[i] > UPPER_THRESHOLD) {
       data[i] = 255;
@@ -77,8 +92,10 @@ function thicken(data: Uint8ClampedArray, width: number, height: number): Uint8C
 
 self.addEventListener("message", (ev) => {
   const { width, height, data } = ev.data as OCRPreprocessMessageInput;
+  const brightness = brightnessOf(data);
   const procImage = thicken(binarize(grayscale(data)), width, height);
-  self.postMessage(procImage, {
+  // const procImage = thicken(binarize(grayscale(data)), width, height);
+  self.postMessage(procImage satisfies OCRPreprocessMessageOutput, {
     transfer: [procImage.buffer]
   });
 });

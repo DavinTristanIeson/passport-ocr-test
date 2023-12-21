@@ -6,18 +6,22 @@ const ocrResultTextarea = document.querySelector<HTMLTextAreaElement>("#ocr_resu
 const ocrErrorText = document.querySelector<HTMLParagraphElement>("#ocr_error")!;
 const ocrSourceImageContainer = document.querySelector<HTMLDivElement>("#ocr_src_img_container")!;
 const ocrProcessedImageContainer = document.querySelector<HTMLDivElement>("#ocr_proc_img_container")!;
-const ocrCanvas = document.querySelector<HTMLCanvasElement>("#ocr_canvas")!;
 
-const OCR = new PassportOCR(ocrCanvas);
+const OCR = new PassportOCR({
+  onProcessImage: (objectUrl) => {
+    const processedImage = document.createElement("img");
+    processedImage.src = objectUrl;
+    processedImage.alt = "Canvas";
+    ocrProcessedImageContainer.innerHTML = '';
+    ocrProcessedImageContainer.appendChild(processedImage);
+  }
+});
 
 ocrFileInput.addEventListener("input", async (ev) => {
   const file = (ev.target as HTMLInputElement).files?.[0];
-  if (!file) {
-    ocrSourceImageContainer.innerHTML = '';
-    const context = ocrCanvas.getContext('2d')!;
-    context.clearRect(0, 0, ocrCanvas.width, ocrCanvas.height);
-    return;
-  }
+  ocrSourceImageContainer.innerHTML = '';
+  OCR.clearCanvas();
+  if (!file) return;
   const img = document.createElement("img");
   img.src = URL.createObjectURL(file);
   img.alt = file.name;
@@ -32,12 +36,7 @@ ocrExecuteButton.addEventListener("click", async () => {
   ocrExecuteButton.disabled = true;
   try {
     const file = ocrFileInput.files![0];
-    const objectUrl = await OCR.mountFile(file);
-
-    const processedImage = document.createElement("img");
-    processedImage.src = objectUrl;
-    processedImage.alt = file.name;
-    ocrProcessedImageContainer.appendChild(processedImage);
+    await OCR.mountFile(file);
 
     const result = await OCR.run();
 
