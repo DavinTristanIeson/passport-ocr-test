@@ -20,7 +20,7 @@ function runWorker<TInput, TOutput>(worker: Worker, input: TInput, transfer?: Tr
 }
 
 async function pause() {
-  await new Promise((resolve) => setTimeout(resolve, 10000));
+  await new Promise((resolve) => setTimeout(resolve, 5000));
 }
 
 type OCRTarget = {
@@ -153,7 +153,7 @@ export default class PassportOCR {
   private async debugImage(imageUrl?: string) {
     if (this.options.onProcessImage) {
       await this.options.onProcessImage(imageUrl || this.canvas.toDataURL());
-      // await pause();
+      await pause();
     }
   }
   private async getScheduler(): Promise<Scheduler> {
@@ -212,11 +212,24 @@ export default class PassportOCR {
     ctx.drawImage(image, 0, 0);
 
     const viewBoundary = await this.locateViewArea();
-    ctx.drawImage(image, 0, 0);
 
     const viewWidth = viewBoundary.x1 - viewBoundary.x0;
-    const viewHeight = viewBoundary.y1 - viewBoundary.y0
-    const viewSection = ctx.getImageData(viewBoundary.x0, viewBoundary.y0, viewWidth, viewHeight);
+    const viewHeight = viewBoundary.y1 - viewBoundary.y0;
+
+    const tempCanvas = document.createElement("canvas");
+    tempCanvas.width = this.canvas.width;
+    tempCanvas.height = this.canvas.height;
+    const tempCtx = tempCanvas.getContext('2d', {
+      willReadFrequently: true,
+    })!;
+    tempCtx.translate(-viewBoundary.x0, -viewBoundary.y0);
+    tempCtx.rotate(-viewBoundary.angle);
+    tempCtx.drawImage(this.canvas, 0, 0);
+    await this.debugImage(tempCanvas.toDataURL());
+
+    ctx.drawImage(tempCanvas, 0, 0);
+    const viewSection = ctx.getImageData(0, 0, viewWidth, viewHeight);
+    ctx.resetTransform();
     this.canvas.width = viewWidth;
     this.canvas.height = viewHeight;
     ctx.putImageData(viewSection, 0, 0);
@@ -233,7 +246,7 @@ export default class PassportOCR {
     await this.debugImage();
   }
 
-  private async locateViewArea(): Promise<Bbox> {
+  private async locateViewArea() {
     const scheduler = await this.getScheduler();
     const ctx = this.canvasContext;
 
@@ -266,14 +279,24 @@ export default class PassportOCR {
     const y0 = Math.max(indonesiaWord.bbox.y1, republikWord.bbox.y1);
     const height = (y0 - Math.max(republikWord.bbox.y0, indonesiaWord.bbox.y0));
 
+    const angle = Math.atan2(
+      // Get average of y0 and y1 differences
+      ((indonesiaWord.bbox.y0 - republikWord.bbox.y0) + (indonesiaWord.bbox.y1 - republikWord.bbox.y1)) / (this.canvas.height * 2),
+      (indonesiaWord.bbox.x1 - republikWord.bbox.x0) / this.canvas.width);
+    console.log(republikWord.bbox, indonesiaWord.bbox, (indonesiaWord.bbox.y1 - republikWord.bbox.y0) / this.canvas.height, (indonesiaWord.bbox.x1 - republikWord.bbox.x0) / this.canvas.width, angle);
+
     const viewRect = {
       x0: republikWord.bbox.x0 - (republikWord.bbox.x1 - republikWord.bbox.x0) * 0.1,
       y0: y0 + height,
       x1: indonesiaWord.bbox.x0 + (width * 1.4),
       y1: y0 + height + (width * 1.25),
+      angle,
     }
+    ctx.translate(viewRect.x0, viewRect.y0);
+    ctx.rotate(angle);
     ctx.strokeStyle = "green";
-    ctx.strokeRect(viewRect.x0, viewRect.y0, viewRect.x1 - viewRect.x0, viewRect.y1 - viewRect.y0);
+    ctx.strokeRect(0, 0, viewRect.x1 - viewRect.x0, viewRect.y1 - viewRect.y0);
+    ctx.resetTransform();
     await this.debugImage();
     ctx.putImageData(oldImageData, 0, 0);
 
