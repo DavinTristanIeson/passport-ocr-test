@@ -20,7 +20,7 @@ function runWorker<TInput, TOutput>(worker: Worker, input: TInput, transfer?: Tr
 }
 
 async function pause() {
-  await new Promise((resolve) => setTimeout(resolve, 3000));
+  await new Promise((resolve) => setTimeout(resolve, 10000));
 }
 
 type OCRTarget = {
@@ -40,7 +40,7 @@ export default class PassportOCR {
         x0: 0.010,
         y0: 0.080,
         x1: 0.230,
-        y1: 0.150,
+        y1: 0.180,
       },
     },
     countryCode: {
@@ -48,7 +48,7 @@ export default class PassportOCR {
         x0: 0.240,
         y0: 0.080,
         x1: 0.560,
-        y1: 0.150
+        y1: 0.180
       },
     },
     passportNumber: {
@@ -56,7 +56,7 @@ export default class PassportOCR {
         x0: 0.670,
         y0: 0.080,
         x1: 0.960,
-        y1: 0.180,
+        y1: 0.200,
       },
     },
     fullName: {
@@ -64,7 +64,7 @@ export default class PassportOCR {
         x0: 0.010,
         y0: 0.250,
         x1: 0.780,
-        y1: 0.330,
+        y1: 0.350,
       },
     },
     sex: {
@@ -72,7 +72,7 @@ export default class PassportOCR {
         x0: 0.800,
         y0: 0.250,
         x1: 0.960,
-        y1: 0.330,
+        y1: 0.350,
       },
     },
     nationality: {
@@ -80,7 +80,7 @@ export default class PassportOCR {
         x0: 0.010,
         y0: 0.400,
         x1: 0.780,
-        y1: 0.480,
+        y1: 0.500,
       },
     },
     dateOfBirth: {
@@ -88,7 +88,7 @@ export default class PassportOCR {
         x0: 0.010,
         y0: 0.565,
         x1: 0.350,
-        y1: 0.645,
+        y1: 0.665,
       },
     },
     sex2: {
@@ -96,31 +96,31 @@ export default class PassportOCR {
         x0: 0.400,
         y0: 0.565,
         x1: 0.540,
-        y1: 0.645,
+        y1: 0.665,
       },
     },
     placeOfBirth: {
       bbox: {
-        x0: 0.640,
+        x0: 0.600,
         y0: 0.565,
         x1: 0.960,
-        y1: 0.645
+        y1: 0.665
       },
     },
     dateOfIssue: {
       bbox: {
         x0: 0.010,
-        y0: 0.725,
+        y0: 0.710,
         x1: 0.350,
-        y1: 0.805,
+        y1: 0.810,
       },
     },
     dateofExpiry: {
       bbox: {
         x0: 0.640,
-        y0: 0.565,
+        y0: 0.710,
         x1: 0.960,
-        y1: 0.805,
+        y1: 0.810,
       },
     },
     regNumber: {
@@ -128,7 +128,7 @@ export default class PassportOCR {
         x0: 0.010,
         y0: 0.890,
         x1: 0.500,
-        y1: 0.970,
+        y1: 1,
       },
     },
     issuingOffice: {
@@ -136,7 +136,7 @@ export default class PassportOCR {
         x0: 0.500,
         y0: 0.890,
         x1: 0.960,
-        y1: 0.970,
+        y1: 1,
       },
     }
   } satisfies Record<string, OCRTarget>;
@@ -153,7 +153,7 @@ export default class PassportOCR {
   private async debugImage(imageUrl?: string) {
     if (this.options.onProcessImage) {
       await this.options.onProcessImage(imageUrl || this.canvas.toDataURL());
-      await pause();
+      // await pause();
     }
   }
   private async getScheduler(): Promise<Scheduler> {
@@ -210,7 +210,6 @@ export default class PassportOCR {
     });
     const ctx = this.canvasContext;
     ctx.drawImage(image, 0, 0);
-    const imageData = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height)!;
 
     const viewBoundary = await this.locateViewArea();
     ctx.drawImage(image, 0, 0);
@@ -263,14 +262,15 @@ export default class PassportOCR {
     if (!republikWord || !indonesiaWord) {
       throw new Error("Cannot find passport");
     }
-    const width = (indonesiaWord.bbox.x1 - republikWord.bbox.x0) * 1.4;
-    const height = (indonesiaWord.bbox.x1 - republikWord.bbox.x0) * 1.4;
+    const width = (indonesiaWord.bbox.x1 - republikWord.bbox.x0);
+    const y0 = Math.max(indonesiaWord.bbox.y1, republikWord.bbox.y1);
+    const height = (y0 - Math.max(republikWord.bbox.y0, indonesiaWord.bbox.y0));
 
     const viewRect = {
       x0: republikWord.bbox.x0 - (republikWord.bbox.x1 - republikWord.bbox.x0) * 0.1,
-      y0: indonesiaWord.bbox.y1 + (indonesiaWord.bbox.y1 - indonesiaWord.bbox.y0),
-      x1: indonesiaWord.bbox.x0 + width,
-      y1: republikWord.bbox.y0 + height,
+      y0: y0 + height,
+      x1: indonesiaWord.bbox.x0 + (width * 1.4),
+      y1: y0 + height + (width * 1.25),
     }
     ctx.strokeStyle = "green";
     ctx.strokeRect(viewRect.x0, viewRect.y0, viewRect.x1 - viewRect.x0, viewRect.y1 - viewRect.y0);
@@ -291,6 +291,17 @@ export default class PassportOCR {
     const result = await scheduler.addJob("recognize", imageSectionUrl);
     return result.data.lines[0] ?? null;
   }
+  private async markBoxes(boxes: Bbox[]) {
+    const ctx = this.canvasContext;
+    ctx.strokeStyle = "green"
+    for (const box of boxes) {
+      ctx.strokeRect(box.x0, box.y0, box.x1 - box.x0, box.y1 - box.y0);
+    }
+  }
+  private processLine(line: Line): string {
+    return line.text.trim();
+  }
+
   async run(): Promise<PassportOCRPayload> {
     const ctx = this.canvasContext;
     const scheduler = await this.getScheduler();
@@ -303,7 +314,14 @@ export default class PassportOCR {
       result.sex = result.sex2;
     }
     delete result.sex2;
-    return Object.fromEntries(Object.entries(result).map(entry => [entry[0], entry[1]?.text.trim()])) as PassportOCRPayload;
+    this.markBoxes(Object.values(PassportOCR.targets).filter(x => x != null).map(({ bbox }) => ({
+      x0: bbox.x0 * this.canvas.width,
+      y0: bbox.y0 * this.canvas.height,
+      x1: bbox.x1 * this.canvas.width,
+      y1: bbox.y1 * this.canvas.height,
+    })));
+    await this.debugImage();
+    return Object.fromEntries(Object.entries(result).map(entry => [entry[0], entry[1] ? this.processLine(entry[1]) : null])) as PassportOCRPayload;
   }
 
   async terminate() {
