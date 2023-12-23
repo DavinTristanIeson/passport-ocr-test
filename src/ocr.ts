@@ -23,6 +23,14 @@ async function pause() {
   await new Promise((resolve) => setTimeout(resolve, 5000));
 }
 
+function median(arr: number[]) {
+  if (arr.length % 2 === 0) {
+    return (arr[arr.length / 2 - 1] + arr[arr.length / 2]) / 2;
+  } else {
+    return arr[Math.floor(arr.length / 2)];
+  }
+}
+
 type OCRTarget = {
   bbox: Bbox;
 }
@@ -40,7 +48,7 @@ export default class PassportOCR {
         x0: 0.010,
         y0: 0.080,
         x1: 0.230,
-        y1: 0.180,
+        y1: 0.200,
       },
     },
     countryCode: {
@@ -48,21 +56,21 @@ export default class PassportOCR {
         x0: 0.240,
         y0: 0.080,
         x1: 0.560,
-        y1: 0.180
+        y1: 0.200
       },
     },
     passportNumber: {
       bbox: {
-        x0: 0.670,
+        x0: 0.600,
         y0: 0.080,
-        x1: 0.960,
+        x1: 1,
         y1: 0.200,
       },
     },
     fullName: {
       bbox: {
         x0: 0.010,
-        y0: 0.250,
+        y0: 0.230,
         x1: 0.780,
         y1: 0.350,
       },
@@ -70,15 +78,15 @@ export default class PassportOCR {
     sex: {
       bbox: {
         x0: 0.800,
-        y0: 0.250,
-        x1: 0.960,
+        y0: 0.230,
+        x1: 1,
         y1: 0.350,
       },
     },
     nationality: {
       bbox: {
         x0: 0.010,
-        y0: 0.400,
+        y0: 0.380,
         x1: 0.780,
         y1: 0.500,
       },
@@ -86,47 +94,47 @@ export default class PassportOCR {
     dateOfBirth: {
       bbox: {
         x0: 0.010,
-        y0: 0.565,
+        y0: 0.540,
         x1: 0.350,
-        y1: 0.665,
+        y1: 0.660,
       },
     },
     sex2: {
       bbox: {
-        x0: 0.400,
-        y0: 0.565,
+        x0: 0.360,
+        y0: 0.540,
         x1: 0.540,
-        y1: 0.665,
+        y1: 0.660,
       },
     },
     placeOfBirth: {
       bbox: {
-        x0: 0.600,
-        y0: 0.565,
-        x1: 0.960,
-        y1: 0.665
+        x0: 0.560,
+        y0: 0.540,
+        x1: 1,
+        y1: 0.660
       },
     },
     dateOfIssue: {
       bbox: {
         x0: 0.010,
-        y0: 0.710,
+        y0: 0.700,
         x1: 0.350,
-        y1: 0.810,
+        y1: 0.820,
       },
     },
     dateofExpiry: {
       bbox: {
         x0: 0.640,
-        y0: 0.710,
-        x1: 0.960,
-        y1: 0.810,
+        y0: 0.700,
+        x1: 1,
+        y1: 0.820,
       },
     },
     regNumber: {
       bbox: {
         x0: 0.010,
-        y0: 0.890,
+        y0: 0.880,
         x1: 0.500,
         y1: 1,
       },
@@ -134,8 +142,8 @@ export default class PassportOCR {
     issuingOffice: {
       bbox: {
         x0: 0.500,
-        y0: 0.890,
-        x1: 0.960,
+        y0: 0.880,
+        x1: 1,
         y1: 1,
       },
     }
@@ -153,7 +161,7 @@ export default class PassportOCR {
   private async debugImage(imageUrl?: string) {
     if (this.options.onProcessImage) {
       await this.options.onProcessImage(imageUrl || this.canvas.toDataURL());
-      await pause();
+      // await pause();
     }
   }
   private async getScheduler(): Promise<Scheduler> {
@@ -162,7 +170,13 @@ export default class PassportOCR {
     }
     const WORKER_COUNT = 4;
     const scheduler = await createScheduler();
-    const workers = await Promise.all(Array.from({ length: WORKER_COUNT }, () => createWorker("ind")));
+    const workers = await Promise.all(Array.from({ length: WORKER_COUNT }, () => createWorker("ind", undefined, undefined, {
+      // https://github.com/tesseract-ocr/tessdoc/blob/main/ImproveQuality.md
+      // Most words are not dictionary words; numbers should be treated as digits
+      load_system_dawg: '0',
+      load_freq_dawg: '0',
+      load_number_dawg: '0',
+    })));
     for (const worker of workers) {
       scheduler.addWorker(worker);
     }
@@ -195,6 +209,31 @@ export default class PassportOCR {
     return tracker;
   }
 
+  private cropCanvas(box: Bbox, angle: number): ImageData {
+    const width = box.x1 - box.x0;
+    const height = box.y1 - box.y0;
+    const ctx = this.canvasContext;
+
+    const tempCanvas = document.createElement("canvas");
+    tempCanvas.width = this.canvas.width;
+    tempCanvas.height = this.canvas.height;
+    const tempCtx = tempCanvas.getContext('2d', {
+      willReadFrequently: true,
+    })!;
+    tempCtx.translate(-box.x0, -box.y0);
+    tempCtx.rotate(-angle);
+    tempCtx.drawImage(this.canvas, 0, 0);
+
+    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.drawImage(tempCanvas, 0, 0);
+    const cropped = ctx.getImageData(0, 0, width, height);
+    ctx.resetTransform();
+    this.canvas.width = width;
+    this.canvas.height = height;
+    ctx.putImageData(cropped, 0, 0);
+    return cropped;
+  }
+
   async mountFile(file: File) {
     // https://stackoverflow.com/questions/32272904/converting-blob-file-data-to-imagedata-in-javascript
     const fileUrl = URL.createObjectURL(file);
@@ -211,45 +250,50 @@ export default class PassportOCR {
     const ctx = this.canvasContext;
     ctx.drawImage(image, 0, 0);
 
-    const viewBoundary = await this.locateViewArea();
-
-    const viewWidth = viewBoundary.x1 - viewBoundary.x0;
-    const viewHeight = viewBoundary.y1 - viewBoundary.y0;
-
-    const tempCanvas = document.createElement("canvas");
-    tempCanvas.width = this.canvas.width;
-    tempCanvas.height = this.canvas.height;
-    const tempCtx = tempCanvas.getContext('2d', {
-      willReadFrequently: true,
-    })!;
-    tempCtx.translate(-viewBoundary.x0, -viewBoundary.y0);
-    tempCtx.rotate(-viewBoundary.angle);
-    tempCtx.drawImage(this.canvas, 0, 0);
-    await this.debugImage(tempCanvas.toDataURL());
-
-    ctx.drawImage(tempCanvas, 0, 0);
-    const viewSection = ctx.getImageData(0, 0, viewWidth, viewHeight);
-    ctx.resetTransform();
-    this.canvas.width = viewWidth;
-    this.canvas.height = viewHeight;
-    ctx.putImageData(viewSection, 0, 0);
-    await this.debugImage();
-
-    const worker = new Worker(new URL("./preprocess.worker.ts", import.meta.url), { type: 'module' });
-    const procImage = await runWorker<OCRPreprocessMessageInput, OCRPreprocessMessageOutput>(worker, {
-      width: this.canvas.width,
-      height: this.canvas.height,
-      data: viewSection.data,
-    }, [viewSection.data.buffer]);
-
-    ctx.putImageData(new ImageData(procImage, this.canvas.width, this.canvas.height), 0, 0);
-    await this.debugImage();
+    await this.locateViewArea();
   }
 
+  /** Mutates the canvas */
   private async locateViewArea() {
     const scheduler = await this.getScheduler();
     const ctx = this.canvasContext;
+    const oldImageData = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+    const p0 = await this.locateViewAreaTop(scheduler, ctx);
+    const viewRect = {
+      x0: p0.x,
+      y0: p0.y,
+      x1: this.canvas.width,
+      y1: this.canvas.height,
+      angle: p0.angle,
+    }
 
+    {
+      ctx.translate(viewRect.x0, viewRect.y0);
+      ctx.rotate(p0.angle);
+      ctx.strokeStyle = "green";
+      ctx.strokeRect(0, 0, viewRect.x1 - viewRect.x0, viewRect.y1 - viewRect.y0);
+      ctx.resetTransform();
+      await this.debugImage();
+    }
+    ctx.putImageData(oldImageData, 0, 0);
+
+    this.cropCanvas(viewRect, viewRect.angle);
+    await this.debugImage();
+    const p1 = await this.locateViewAreaBottom(scheduler, ctx);
+    const oldImageData2 = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+
+    {
+      ctx.strokeStyle = "green";
+      ctx.strokeRect(0, 0, p1.x, p1.y);
+      await this.debugImage();
+    }
+    this.canvas.width = p1.x;
+    this.canvas.height = p1.y;
+    ctx.putImageData(oldImageData2, 0, 0);
+    await this.debugImage();
+  }
+
+  private async locateViewAreaTop(scheduler: Scheduler, ctx: CanvasRenderingContext2D) {
     const imageData = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
     const worker = new Worker(new URL("./locator.worker.ts", import.meta.url), { type: 'module' });
     const procImage = await runWorker<OCRPreprocessMessageInput, OCRPreprocessMessageOutput>(worker, {
@@ -257,7 +301,6 @@ export default class PassportOCR {
       height: imageData.height,
       data: imageData.data,
     }, [imageData.data.buffer]);
-    const oldImageData = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
     ctx.putImageData(new ImageData(procImage, imageData.width, imageData.height), 0, 0);
     const imageUrl = this.canvas.toDataURL();
     await this.debugImage(imageUrl);
@@ -273,34 +316,71 @@ export default class PassportOCR {
       }
     }
     if (!republikWord || !indonesiaWord) {
-      throw new Error("Cannot find passport");
+      throw new Error("Cannot find top-left end of passport");
     }
     const width = (indonesiaWord.bbox.x1 - republikWord.bbox.x0);
-    const y0 = Math.max(indonesiaWord.bbox.y1, republikWord.bbox.y1);
-    const height = (y0 - Math.max(republikWord.bbox.y0, indonesiaWord.bbox.y0));
+    const height = indonesiaWord.bbox.y1 - indonesiaWord.bbox.y0;
 
     const angle = Math.atan2(
       // Get average of y0 and y1 differences
       ((indonesiaWord.bbox.y0 - republikWord.bbox.y0) + (indonesiaWord.bbox.y1 - republikWord.bbox.y1)) / (this.canvas.height * 2),
       (indonesiaWord.bbox.x1 - republikWord.bbox.x0) / this.canvas.width);
-    console.log(republikWord.bbox, indonesiaWord.bbox, (indonesiaWord.bbox.y1 - republikWord.bbox.y0) / this.canvas.height, (indonesiaWord.bbox.x1 - republikWord.bbox.x0) / this.canvas.width, angle);
+    const y0 = -indonesiaWord.bbox.x1 * Math.sin(angle) + (indonesiaWord.bbox.y1 + height) * Math.cos(angle);
 
-    const viewRect = {
-      x0: republikWord.bbox.x0 - (republikWord.bbox.x1 - republikWord.bbox.x0) * 0.1,
-      y0: y0 + height,
-      x1: indonesiaWord.bbox.x0 + (width * 1.4),
-      y1: y0 + height + (width * 1.25),
+    return {
+      x: republikWord.bbox.x0 - (republikWord.bbox.x1 - republikWord.bbox.x0) * 0.1,
+      y: y0,
+      // Predicted width and height. This doesn't have to be accurate, but just enough so that locateViewAreaBottom can find the last two lines in the passport.
+      width: width * 1.35,
+      y1: width * 1.4,
       angle,
     }
-    ctx.translate(viewRect.x0, viewRect.y0);
-    ctx.rotate(angle);
-    ctx.strokeStyle = "green";
-    ctx.strokeRect(0, 0, viewRect.x1 - viewRect.x0, viewRect.y1 - viewRect.y0);
-    ctx.resetTransform();
-    await this.debugImage();
-    ctx.putImageData(oldImageData, 0, 0);
+  }
 
-    return viewRect;
+
+  private async locateViewAreaBottom(scheduler: Scheduler, ctx: CanvasRenderingContext2D) {
+    const imageData = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+    const preprocessWorker = new Worker(new URL("./preprocess.worker.ts", import.meta.url), { type: 'module' });
+    const procImage = await runWorker<OCRPreprocessMessageInput, OCRPreprocessMessageOutput>(preprocessWorker, {
+      width: imageData.width,
+      height: imageData.height,
+      data: imageData.data,
+    }, [imageData.data.buffer]);
+    ctx.putImageData(new ImageData(procImage, imageData.width, imageData.height), 0, 0);
+    await this.debugImage();
+
+    const result = await scheduler.addJob("recognize", this.canvas.toDataURL());
+
+    let endOfPassport = -1;
+    // Find the line with the most digits (that's probably the bottom-most line in the passport)
+    for (let i = 0; i < result.data.lines.length; i++) {
+      const line = result.data.lines[i];
+      let numberCount = 0;
+      const ZERO = '0'.charCodeAt(0);
+      for (const chr of line.text) {
+        const ascii = chr.charCodeAt(0);
+        if (ZERO <= ascii && ascii <= ZERO + 9) {
+          numberCount++;
+        }
+      }
+      if (numberCount > 8) {
+        endOfPassport = i;
+      }
+    }
+
+    if (endOfPassport === -1) {
+      throw new Error("Cannot find bottom-right end of passport");
+    }
+    const relevantLines = result.data.lines.slice(Math.max(endOfPassport - 2 - 6, 0), endOfPassport - 1);
+    const rightEdges = relevantLines.slice(Math.max(0, relevantLines.length - 3), relevantLines.length).map(x => x.bbox.x1);
+    rightEdges.sort((a, b) => a - b);
+    const rightEdgesMedian = median(rightEdges);
+    console.log(relevantLines, rightEdges, rightEdgesMedian);
+
+    return {
+      x: rightEdgesMedian,
+      y: relevantLines[relevantLines.length - 1].bbox.y1,
+    }
   }
 
   private async readTarget(scheduler: Scheduler, target: OCRTarget, ctx: CanvasRenderingContext2D) {

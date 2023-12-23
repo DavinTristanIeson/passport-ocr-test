@@ -53,9 +53,9 @@ function blur(data: Uint8ClampedArray, width: number, height: number) {
 }
 
 function grayscale(data: Uint8ClampedArray) {
-  const RED_INTENCITY_COEF = 0.2126;
-  const GREEN_INTENCITY_COEF = 0.7152;
-  const BLUE_INTENCITY_COEF = 0.0722;
+  // const RED_INTENCITY_COEF = 0.2126;
+  // const GREEN_INTENCITY_COEF = 0.7152;
+  // const BLUE_INTENCITY_COEF = 0.0722;
   for (let i = 0; i < data.length; i += 4) {
     const diffRG = Math.abs(data[i] - data[i + 1]);
     const diffRB = Math.abs(data[i] - data[i + 2]);
