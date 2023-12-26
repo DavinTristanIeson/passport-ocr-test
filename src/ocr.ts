@@ -71,13 +71,13 @@ export default class PassportOCR {
       bbox: {
         x0: 0.010,
         y0: 0.230,
-        x1: 0.780,
+        x1: 0.820,
         y1: 0.350,
       },
     },
     sex: {
       bbox: {
-        x0: 0.800,
+        x0: 0.820,
         y0: 0.230,
         x1: 1,
         y1: 0.350,
@@ -123,7 +123,7 @@ export default class PassportOCR {
         y1: 0.820,
       },
     },
-    dateofExpiry: {
+    dateOfExpiry: {
       bbox: {
         x0: 0.640,
         y0: 0.700,
@@ -170,13 +170,20 @@ export default class PassportOCR {
     }
     const WORKER_COUNT = 4;
     const scheduler = await createScheduler();
-    const workers = await Promise.all(Array.from({ length: WORKER_COUNT }, () => createWorker("ind", undefined, undefined, {
-      // https://github.com/tesseract-ocr/tessdoc/blob/main/ImproveQuality.md
-      // Most words are not dictionary words; numbers should be treated as digits
-      load_system_dawg: '0',
-      load_freq_dawg: '0',
-      load_number_dawg: '0',
-    })));
+    const workers = await Promise.all(Array.from({ length: WORKER_COUNT }, async () => {
+      const worker = await createWorker("ind", undefined, undefined, {
+        // https://github.com/tesseract-ocr/tessdoc/blob/main/ImproveQuality.md
+        // Most words are not dictionary words; numbers should be treated as digits
+        load_system_dawg: '0',
+        load_freq_dawg: '0',
+        load_number_dawg: '0',
+      });
+      // https://github.com/tesseract-ocr/tessdoc/blob/main/APIExample-user_patterns.md
+      await worker.setParameters({
+        user_patterns: "test.patterns",
+      });
+      return worker;
+    }));
     for (const worker of workers) {
       scheduler.addWorker(worker);
     }
@@ -371,11 +378,10 @@ export default class PassportOCR {
     if (endOfPassport === -1) {
       throw new Error("Cannot find bottom-right end of passport");
     }
-    const relevantLines = result.data.lines.slice(Math.max(endOfPassport - 2 - 6, 0), endOfPassport - 1);
+    const relevantLines = result.data.lines.slice(Math.max(endOfPassport - 7, 0), endOfPassport - 1);
     const rightEdges = relevantLines.slice(Math.max(0, relevantLines.length - 3), relevantLines.length).map(x => x.bbox.x1);
     rightEdges.sort((a, b) => a - b);
     const rightEdgesMedian = median(rightEdges);
-    console.log(relevantLines, rightEdges, rightEdgesMedian);
 
     return {
       x: rightEdgesMedian,
