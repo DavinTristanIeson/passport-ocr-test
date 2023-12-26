@@ -389,15 +389,20 @@ export default class PassportOCR {
     }
   }
 
-  private async readTarget(scheduler: Scheduler, target: OCRTarget, ctx: CanvasRenderingContext2D) {
+  private async readTarget(scheduler: Scheduler, target: OCRTarget, imgUrl: string) {
     const width = (target.bbox.x1 - target.bbox.x0) * this.canvas.width;
     const height = (target.bbox.y1 - target.bbox.y0) * this.canvas.height;
     const x = target.bbox.x0 * this.canvas.width;
     const y = target.bbox.y0 * this.canvas.height;
-    const imageSection = ctx.getImageData(x, y, width, height);
-    const imageSectionUrl = getObjectUrlOfImageData(imageSection, width, height);
 
-    const result = await scheduler.addJob("recognize", imageSectionUrl);
+    const result = await scheduler.addJob("recognize", imgUrl, {
+      rectangle: {
+        left: x,
+        top: y,
+        width,
+        height,
+      }
+    });
     return result.data.lines[0] ?? null;
   }
   private async markBoxes(boxes: Bbox[]) {
@@ -412,10 +417,9 @@ export default class PassportOCR {
   }
 
   async run(): Promise<PassportOCRPayload> {
-    const ctx = this.canvasContext;
     const scheduler = await this.getScheduler();
     const result = Object.fromEntries(await Promise.all(Object.entries(PassportOCR.targets).map(async (entry) => {
-      return [entry[0], await this.readTarget(scheduler, entry[1], ctx)] as const;
+      return [entry[0], await this.readTarget(scheduler, entry[1], this.canvas.toDataURL())] as const;
     })));
     if (
       (!result.sex && result.sex2) ||
