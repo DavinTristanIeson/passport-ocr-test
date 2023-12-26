@@ -1,5 +1,5 @@
 import { type ImageLike, createScheduler, type Bbox, createWorker, Scheduler, RecognizeResult, Word, Line } from "tesseract.js";
-import { distance } from 'fastest-levenshtein';
+import { closest, distance } from 'fastest-levenshtein';
 import { OCRPreprocessMessageInput, OCRPreprocessMessageOutput } from "./preprocess.worker";
 
 function getObjectUrlOfImageData(data: ImageData, width: number, height: number): string {
@@ -33,15 +33,26 @@ function median(arr: number[]) {
 
 type OCRTarget = {
   bbox: Bbox;
+  corrector?: ((value: string) => string | null) | boolean;
 }
 
-type PassportOCRPayload = {
+export type PassportOCRPayload = {
   [key in keyof typeof PassportOCR.targets]: string | null;
 };
+export type PassportOCRHistory = {
+  [key in keyof typeof PassportOCR.targets]?: string[];
+}
+
 interface PassportOCROptions {
+  /** Callback for debugging */
   onProcessImage?: (objectUrl: string) => void | Promise<void>;
+  /** An object containing previous manually corrected values */
+  history: PassportOCRHistory;
+  /** How many history entries should be stored at a time */
+  historyLimit: number;
 }
 export default class PassportOCR {
+  /** Bounding boxes for targetting relevant sections in the passport. */
   static targets = {
     type: {
       bbox: {
@@ -50,7 +61,8 @@ export default class PassportOCR {
         x1: 0.230,
         y1: 0.200,
       },
-    },
+      corrector: PassportOCR.correctPassportType,
+    } as OCRTarget,
     countryCode: {
       bbox: {
         x0: 0.240,
@@ -58,7 +70,8 @@ export default class PassportOCR {
         x1: 0.560,
         y1: 0.200
       },
-    },
+      corrector: true,
+    } as OCRTarget,
     passportNumber: {
       bbox: {
         x0: 0.600,
@@ -66,7 +79,7 @@ export default class PassportOCR {
         x1: 1,
         y1: 0.200,
       },
-    },
+    } as OCRTarget,
     fullName: {
       bbox: {
         x0: 0.010,
@@ -74,7 +87,7 @@ export default class PassportOCR {
         x1: 0.820,
         y1: 0.350,
       },
-    },
+    } as OCRTarget,
     sex: {
       bbox: {
         x0: 0.820,
@@ -82,7 +95,8 @@ export default class PassportOCR {
         x1: 1,
         y1: 0.350,
       },
-    },
+      corrector: true,
+    } as OCRTarget,
     nationality: {
       bbox: {
         x0: 0.010,
@@ -90,7 +104,8 @@ export default class PassportOCR {
         x1: 0.780,
         y1: 0.500,
       },
-    },
+      corrector: true,
+    } as OCRTarget,
     dateOfBirth: {
       bbox: {
         x0: 0.010,
@@ -98,7 +113,8 @@ export default class PassportOCR {
         x1: 0.350,
         y1: 0.660,
       },
-    },
+      corrector: PassportOCR.correctPassportDate,
+    } as OCRTarget,
     sex2: {
       bbox: {
         x0: 0.360,
@@ -106,7 +122,7 @@ export default class PassportOCR {
         x1: 0.540,
         y1: 0.660,
       },
-    },
+    } as OCRTarget,
     placeOfBirth: {
       bbox: {
         x0: 0.560,
@@ -114,7 +130,8 @@ export default class PassportOCR {
         x1: 1,
         y1: 0.660
       },
-    },
+      corrector: true,
+    } as OCRTarget,
     dateOfIssue: {
       bbox: {
         x0: 0.010,
@@ -122,7 +139,8 @@ export default class PassportOCR {
         x1: 0.350,
         y1: 0.820,
       },
-    },
+      corrector: PassportOCR.correctPassportDate,
+    } as OCRTarget,
     dateOfExpiry: {
       bbox: {
         x0: 0.640,
@@ -130,7 +148,8 @@ export default class PassportOCR {
         x1: 1,
         y1: 0.820,
       },
-    },
+      corrector: PassportOCR.correctPassportDate,
+    } as OCRTarget,
     regNumber: {
       bbox: {
         x0: 0.010,
@@ -138,7 +157,7 @@ export default class PassportOCR {
         x1: 0.500,
         y1: 1,
       },
-    },
+    } as OCRTarget,
     issuingOffice: {
       bbox: {
         x0: 0.500,
@@ -146,8 +165,11 @@ export default class PassportOCR {
         x1: 1,
         y1: 1,
       },
-    }
-  } satisfies Record<string, OCRTarget>;
+      corrector: true,
+    } as OCRTarget
+  };
+  static MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+
   canvas: HTMLCanvasElement;
   _scheduler: Scheduler | undefined;
   options: PassportOCROptions;
@@ -156,8 +178,28 @@ export default class PassportOCR {
     this.getScheduler();
     this.options = {
       onProcessImage: options?.onProcessImage,
+      history: options?.history ?? Object.create(null),
+      historyLimit: options?.historyLimit ?? 10,
     };
   }
+  private static correctPassportDate(value: string): string | null {
+    // Kadang-kadang huruf dalam bulan bisa disalah-interpretasikan menjadi digit.
+    const match = value.match(/([0-9]{2})\s*([\d\w]{3})\s*([0-9]{4})/);
+    if (!match) return null;
+    const day = match[1];
+    const rawMonth = match[2];
+    const year = match[3];
+    const month = closest(rawMonth, PassportOCR.MONTHS);
+    if (isNaN(parseInt(day, 10)) || isNaN(parseInt(year, 10))) {
+      return null;
+    }
+    return `${day} ${month} ${year}`;
+  }
+
+  private static correctPassportType(value: string) {
+    return value.length === 0 ? null : value[0].toUpperCase();
+  }
+
   private async debugImage(imageUrl?: string) {
     if (this.options.onProcessImage) {
       await this.options.onProcessImage(imageUrl || this.canvas.toDataURL());
@@ -177,10 +219,6 @@ export default class PassportOCR {
         load_system_dawg: '0',
         load_freq_dawg: '0',
         load_number_dawg: '0',
-      });
-      // https://github.com/tesseract-ocr/tessdoc/blob/main/APIExample-user_patterns.md
-      await worker.setParameters({
-        user_patterns: "test.patterns",
       });
       return worker;
     }));
@@ -412,29 +450,83 @@ export default class PassportOCR {
       ctx.strokeRect(box.x0, box.y0, box.x1 - box.x0, box.y1 - box.y0);
     }
   }
-  private processLine(line: Line): string {
-    return line.text.trim();
+  private processLine(key: keyof typeof PassportOCR.targets, line: Line) {
+    let text: string | null = line.text.trim();
+    const originalTarget = PassportOCR.targets[key];
+    if (typeof originalTarget.corrector === 'function') {
+      text = originalTarget.corrector(text);
+    } else if (!!originalTarget.corrector) {
+      const history = this.options.history[key];
+      if (history && history.length > 0) {
+        const candidate = closest(text, history);
+        if (distance(text, candidate) < Math.ceil(text.length * 2 / 3)) {
+          text = candidate;
+        }
+      }
+    }
+    return text;
+  }
+
+  updateHistory(payload: PassportOCRPayload): PassportOCRHistory {
+    for (const rawKey of Object.keys(PassportOCR.targets)) {
+      const key = rawKey as keyof typeof PassportOCR.targets;
+      const targetCorrector = PassportOCR.targets[key].corrector;
+      if (typeof targetCorrector === 'function' || !targetCorrector) {
+        continue;
+      }
+      const value = payload[key];
+      if (!value) {
+        continue;
+      }
+
+      let history = this.options.history[key];
+      if (!history) {
+        history = [];
+        this.options.history[key] = history;
+      }
+      if (!history.find(word => word === value)) {
+        history.push(value);
+        if (history.length > this.options.historyLimit) {
+          history.unshift();
+        }
+      }
+    }
+    return this.options.history;
   }
 
   async run(): Promise<PassportOCRPayload> {
     const scheduler = await this.getScheduler();
-    const result = Object.fromEntries(await Promise.all(Object.entries(PassportOCR.targets).map(async (entry) => {
-      return [entry[0], await this.readTarget(scheduler, entry[1], this.canvas.toDataURL())] as const;
-    })));
+
+    const result: Record<string, Line> = {};
+    await Promise.all(Object.keys(PassportOCR.targets).map(async (k) => {
+      const key = k as keyof typeof PassportOCR.targets;
+      const value = PassportOCR.targets[key];
+      result[key] = await this.readTarget(scheduler, value, this.canvas.toDataURL());
+    }))
     if (
       (!result.sex && result.sex2) ||
       (result.sex && result.sex2 && result.sex.confidence < result.sex2.confidence)) {
       result.sex = result.sex2;
     }
     delete result.sex2;
-    this.markBoxes(Object.values(PassportOCR.targets).filter(x => x != null).map(({ bbox }) => ({
-      x0: bbox.x0 * this.canvas.width,
-      y0: bbox.y0 * this.canvas.height,
-      x1: bbox.x1 * this.canvas.width,
-      y1: bbox.y1 * this.canvas.height,
-    })));
+
+    this.markBoxes(Object.keys(PassportOCR.targets).map((key) => {
+      const { bbox } = PassportOCR.targets[key as keyof typeof PassportOCR.targets];
+      return ({
+        x0: bbox.x0 * this.canvas.width,
+        y0: bbox.y0 * this.canvas.height,
+        x1: bbox.x1 * this.canvas.width,
+        y1: bbox.y1 * this.canvas.height,
+      });
+    }));
     await this.debugImage();
-    return Object.fromEntries(Object.entries(result).map(entry => [entry[0], entry[1] ? this.processLine(entry[1]) : null])) as PassportOCRPayload;
+
+    const payload: Record<string, string | null> = {};
+    for (const key of Object.keys(result)) {
+      payload[key] = result[key] ? this.processLine(key as keyof typeof PassportOCR.targets, result[key]) : null;
+    }
+
+    return payload as PassportOCRPayload;
   }
 
   async terminate() {

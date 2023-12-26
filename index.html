@@ -18,6 +18,13 @@
         width: 400px;
         height: 300px;
       }
+      #ocr_history th {
+        text-align: left;
+        text-transform: capitalize;
+      }
+      #ocr_history td {
+        text-align: left;
+      }
     </style>
   </head>
   <body>
@@ -30,6 +37,8 @@
         <button id="ocr_exec">
           OCR
         </button>
+        <p class="error" id="ocr_error">
+        </p>
       </div>
       <div id="ocr_src_img_container" class="ocr-img">
 
@@ -38,10 +47,16 @@
 
       </div>
       <div>
-        <textarea id="ocr_result" rows="10" cols="40"></textarea>
+        <div>
+          <textarea id="ocr_result" rows="10" cols="40"></textarea>
+        </div>
+        <button id="ocr_correct_result">Correction</button>
       </div>
-      <p class="error" id="ocr_error" style="display:none">
-      </p>
+      <div>
+        <table id="ocr_history">
+          
+        </table>
+      </div>
     </div>
   </body>
 </html>
