@@ -19,10 +19,6 @@ function runWorker<TInput, TOutput>(worker: Worker, input: TInput, transfer?: Tr
   });
 }
 
-async function pause() {
-  await new Promise((resolve) => setTimeout(resolve, 5000));
-}
-
 function median(arr: number[]) {
   if (arr.length % 2 === 0) {
     return (arr[arr.length / 2 - 1] + arr[arr.length / 2]) / 2;
@@ -33,7 +29,7 @@ function median(arr: number[]) {
 
 type OCRTarget = {
   bbox: Bbox;
-  corrector?: ((value: string) => string | null) | boolean;
+  corrector?: ((value: string, history: string[] | undefined) => string | null) | boolean;
 }
 
 export type PassportOCRPayload = {
@@ -51,13 +47,14 @@ interface PassportOCROptions {
   /** How many history entries should be stored at a time */
   historyLimit: number;
 }
+
 export default class PassportOCR {
   /** Bounding boxes for targetting relevant sections in the passport. */
   static targets = {
     type: {
       bbox: {
-        x0: 0.010,
-        y0: 0.080,
+        x0: 0.000,
+        y0: 0.060,
         x1: 0.230,
         y1: 0.200,
       },
@@ -66,7 +63,7 @@ export default class PassportOCR {
     countryCode: {
       bbox: {
         x0: 0.240,
-        y0: 0.080,
+        y0: 0.060,
         x1: 0.560,
         y1: 0.200
       },
@@ -75,14 +72,14 @@ export default class PassportOCR {
     passportNumber: {
       bbox: {
         x0: 0.600,
-        y0: 0.080,
+        y0: 0.060,
         x1: 1,
         y1: 0.200,
       },
     } as OCRTarget,
     fullName: {
       bbox: {
-        x0: 0.010,
+        x0: 0.000,
         y0: 0.230,
         x1: 0.820,
         y1: 0.350,
@@ -95,7 +92,7 @@ export default class PassportOCR {
         x1: 1,
         y1: 0.350,
       },
-      corrector: true,
+      corrector: PassportOCR.correctSex,
     } as OCRTarget,
     nationality: {
       bbox: {
@@ -108,7 +105,7 @@ export default class PassportOCR {
     } as OCRTarget,
     dateOfBirth: {
       bbox: {
-        x0: 0.010,
+        x0: 0.000,
         y0: 0.540,
         x1: 0.350,
         y1: 0.660,
@@ -122,6 +119,7 @@ export default class PassportOCR {
         x1: 0.540,
         y1: 0.660,
       },
+      corrector: PassportOCR.correctSex,
     } as OCRTarget,
     placeOfBirth: {
       bbox: {
@@ -134,7 +132,7 @@ export default class PassportOCR {
     } as OCRTarget,
     dateOfIssue: {
       bbox: {
-        x0: 0.010,
+        x0: 0.000,
         y0: 0.700,
         x1: 0.350,
         y1: 0.820,
@@ -152,7 +150,7 @@ export default class PassportOCR {
     } as OCRTarget,
     regNumber: {
       bbox: {
-        x0: 0.010,
+        x0: 0.000,
         y0: 0.880,
         x1: 0.500,
         y1: 1,
@@ -196,14 +194,42 @@ export default class PassportOCR {
     return `${day} ${month} ${year}`;
   }
 
-  private static correctPassportType(value: string) {
-    return value.length === 0 ? null : value[0].toUpperCase();
+  private static correctPassportType(value: string, history: string[] | undefined) {
+    if (!value) return null;
+    let type: string | undefined;
+    for (const chr of value.toUpperCase()) {
+      const ascii = chr.charCodeAt(0);
+      if (65 <= ascii && ascii <= 65 + 26) {
+        type = chr;
+        break;
+      }
+    }
+    if (type) {
+      return type;
+    }
+    if (history && history.length > 0) {
+      return history[history.length - 1];
+    }
+    return null;
+  }
+  private static correctSex(value: string, history: string[] | undefined) {
+    if (!value) return null;
+    const match = value.toUpperCase().match(/([A-Z])\/*([A-Z])/);
+    if (!match) return null;
+    let sex = `${match[1]}/${match[2]}`;
+    if (history && history.length > 0) {
+      const closestMatch = closest(sex, history);
+      if (distance(sex, closestMatch) <= 1) {
+        sex = closestMatch;
+      }
+    }
+    return sex;
   }
 
   private async debugImage(imageUrl?: string) {
     if (this.options.onProcessImage) {
       await this.options.onProcessImage(imageUrl || this.canvas.toDataURL());
-      // await pause();
+      // await new Promise((resolve) => setTimeout(resolve, 5000));
     }
   }
   private async getScheduler(): Promise<Scheduler> {
@@ -212,7 +238,7 @@ export default class PassportOCR {
     }
     const WORKER_COUNT = 4;
     const scheduler = await createScheduler();
-    const workers = await Promise.all(Array.from({ length: WORKER_COUNT }, async () => {
+    const promisedWorkers = Array.from({ length: WORKER_COUNT }, async (_, i) => {
       const worker = await createWorker("ind", undefined, undefined, {
         // https://github.com/tesseract-ocr/tessdoc/blob/main/ImproveQuality.md
         // Most words are not dictionary words; numbers should be treated as digits
@@ -221,7 +247,8 @@ export default class PassportOCR {
         load_number_dawg: '0',
       });
       return worker;
-    }));
+    });
+    const workers = await Promise.all(promisedWorkers);
     for (const worker of workers) {
       scheduler.addWorker(worker);
     }
@@ -307,8 +334,8 @@ export default class PassportOCR {
     const viewRect = {
       x0: p0.x,
       y0: p0.y,
-      x1: this.canvas.width,
-      y1: this.canvas.height,
+      x1: p0.x + p0.width,
+      y1: p0.y + p0.height,
       angle: p0.angle,
     }
 
@@ -351,35 +378,55 @@ export default class PassportOCR {
     await this.debugImage(imageUrl);
 
     const result = await scheduler.addJob("recognize", imageUrl);
-    let republikWord: Word | undefined, indonesiaWord: Word | undefined;
+    let republikWord: Word | undefined, indonesiaWord: Word | undefined, pasporWord: Word | undefined;
     for (const line of result.data.lines) {
-      const { republik, indonesia } = PassportOCR.findWordsInLine(line, ["republik", "indonesia"]);
+      const { republik, indonesia, paspor } = PassportOCR.findWordsInLine(line, ["republik", "indonesia", "paspor"]);
       if (republik && indonesia) {
         republikWord = republik;
         indonesiaWord = indonesia;
         break;
       }
+      if (paspor && !pasporWord) {
+        pasporWord = paspor;
+      }
     }
-    if (!republikWord || !indonesiaWord) {
-      throw new Error("Cannot find top-left end of passport");
-    }
-    const width = (indonesiaWord.bbox.x1 - republikWord.bbox.x0);
-    const height = indonesiaWord.bbox.y1 - indonesiaWord.bbox.y0;
 
-    const angle = Math.atan2(
-      // Get average of y0 and y1 differences
-      ((indonesiaWord.bbox.y0 - republikWord.bbox.y0) + (indonesiaWord.bbox.y1 - republikWord.bbox.y1)) / (this.canvas.height * 2),
-      (indonesiaWord.bbox.x1 - republikWord.bbox.x0) / this.canvas.width);
-    const y0 = -indonesiaWord.bbox.x1 * Math.sin(angle) + (indonesiaWord.bbox.y1 + height) * Math.cos(angle);
+    // SCENARIO #1: REPUBLIK INDONESIA is found. x0 is always aligned with relevant section.
+    if (republikWord && indonesiaWord) {
+      const width = (indonesiaWord.bbox.x1 - republikWord.bbox.x0);
+      const indonesiaHeight = indonesiaWord.bbox.y1 - indonesiaWord.bbox.y0;
+      const republikHeight = republikWord.bbox.y1 - republikWord.bbox.y0;
 
-    return {
-      x: republikWord.bbox.x0 - (republikWord.bbox.x1 - republikWord.bbox.x0) * 0.1,
-      y: y0,
-      // Predicted width and height. This doesn't have to be accurate, but just enough so that locateViewAreaBottom can find the last two lines in the passport.
-      width: width * 1.35,
-      y1: width * 1.4,
-      angle,
+      const angle = Math.atan2(
+        ((indonesiaWord.bbox.y0 - republikWord.bbox.y0) + (indonesiaWord.bbox.y1 - republikWord.bbox.y1)) / 2 / this.canvas.height,
+        (indonesiaWord.bbox.x1 - republikWord.bbox.x0) / this.canvas.width);
+
+      // Rotate y0 according to angle
+      // const y0 = -indonesiaWord.bbox.x1 * Math.sin(angle) + (indonesiaWord.bbox.y1 + indonesiaHeight) * Math.cos(angle);
+
+      return {
+        x: republikWord.bbox.x0 - (republikWord.bbox.x1 - republikWord.bbox.x0) * 0.1,
+        y: republikWord.bbox.y1 + republikHeight,
+        // Predicted width and height. This doesn't have to be accurate, but just enough so that locateViewAreaBottom can find the last two lines in the passport.
+        width: width * 2.2,
+        height: width * 2.2,
+        angle,
+      }
     }
+    // SCENARIO #2: REPUBLIK INDONESIA is blocked for some reason, but PASPOR is found. y1 is always aligned with relevant section.
+    if (pasporWord) {
+      const width = (pasporWord.bbox.x1 - pasporWord.bbox.x0);
+      const height = (pasporWord.bbox.y1 - pasporWord.bbox.y0);
+      return {
+        x: pasporWord.bbox.x1 + (width * 0.75),
+        y: pasporWord.bbox.y1 - (height * 0.5),
+        width: width * 3 * 2,
+        height: width * 3 * 2,
+        angle: 0
+      }
+    }
+
+    throw new Error("Cannot find top-left end of passport");
   }
 
 
@@ -453,10 +500,10 @@ export default class PassportOCR {
   private processLine(key: keyof typeof PassportOCR.targets, line: Line) {
     let text: string | null = line.text.trim();
     const originalTarget = PassportOCR.targets[key];
+    const history = this.options.history[key];
     if (typeof originalTarget.corrector === 'function') {
-      text = originalTarget.corrector(text);
+      text = originalTarget.corrector(text, history);
     } else if (!!originalTarget.corrector) {
-      const history = this.options.history[key];
       if (history && history.length > 0) {
         const candidate = closest(text, history);
         if (distance(text, candidate) < Math.ceil(text.length * 2 / 3)) {
@@ -471,7 +518,7 @@ export default class PassportOCR {
     for (const rawKey of Object.keys(PassportOCR.targets)) {
       const key = rawKey as keyof typeof PassportOCR.targets;
       const targetCorrector = PassportOCR.targets[key].corrector;
-      if (typeof targetCorrector === 'function' || !targetCorrector) {
+      if (!targetCorrector) {
         continue;
       }
       const value = payload[key];

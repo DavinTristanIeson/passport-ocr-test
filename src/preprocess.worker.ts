@@ -36,11 +36,12 @@ function deviationOf(data: Uint8ClampedArray, mean: number): number {
 }
 
 function grayscale(data: Uint8ClampedArray) {
-  const brightness = brightnessOf(data) / 255;
-  const brightnessFactor = 0.7 + Math.pow(1 - brightness, 2) * 0.3;
   for (let i = 0; i < data.length; i += 4) {
-    const [R, G, B] = [data[i], data[i + 1], data[i + 2]];
-    const cellColor = Math.min(255, Math.max(0, G * brightnessFactor + B * brightnessFactor));
+    const [R, G, B] = [data[i], data[i + 1], data[i + 2]].map(x => x / 255);
+    const [diffRG, diffRB, diffGB] = [R - G, R - B, G - B].map(x => Math.abs(x));
+    const saturationFactor = R * (diffRG + diffRB) + G * (diffRG + diffGB) * 1.2 + B * (diffRB + diffGB) * 1.2;
+    const brightnessFactor = (R + G + B) / 3;
+    const cellColor = Math.min(255, Math.max(0, (brightnessFactor + saturationFactor) * 255));
     for (let offset = 0; offset < 3; offset++) {
       data[i + offset] = cellColor;
     }
@@ -51,8 +52,8 @@ function grayscale(data: Uint8ClampedArray) {
 function binarize(data: Uint8ClampedArray): Uint8ClampedArray {
   const brightness = brightnessOf(data);
   const deviation = deviationOf(data, brightness);
-  const UPPER_THRESHOLD = brightness - deviation;
-  const LOWER_THRESHOLD = brightness - deviation * 2;
+  const UPPER_THRESHOLD = brightness - deviation * 0.5;
+  const LOWER_THRESHOLD = brightness - deviation * 1.5;
   for (let i = 0; i < data.length; i++) {
     if (data[i] > UPPER_THRESHOLD) {
       data[i] = 255;
