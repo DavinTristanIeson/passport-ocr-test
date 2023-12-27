@@ -48,6 +48,11 @@ interface PassportOCROptions {
   historyLimit: number;
 }
 
+/** Helper class to perform OCR for passports.
+ * 
+ *  The recommended flow is: ``mountFile`` (to locate the relevant passport section) -> ``run`` (perform OCR) -> ...repeat... -> ``terminate`` (after you're done)
+ *  
+ *  Note that ``mountFile`` and ``run`` mutates the state of the canvas. It is recommended that if an error occurs, you should repeat from the ``mountFile`` stage. */
 export default class PassportOCR {
   /** Bounding boxes for targetting relevant sections in the passport. */
   static targets = {
@@ -168,7 +173,9 @@ export default class PassportOCR {
   };
   static MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
 
+  /** This can be attached to a DOM tree for debugging purposes. All painting operations to process images for OCR will be performed on this. */
   canvas: HTMLCanvasElement;
+  /** The Tesseract Scheduler used to perform OCR tasks. Prefer using getScheduler as there's no guarantee that ``_scheduler`` is initialized when you use it. */
   _scheduler: Scheduler | undefined;
   options: PassportOCROptions;
   constructor(options?: Partial<PassportOCROptions>) {
@@ -180,8 +187,10 @@ export default class PassportOCR {
       historyLimit: options?.historyLimit ?? 10,
     };
   }
+
+  /** Corrects passport dates. Day and year must be numbers, but there's a loose word comparison for the month part. */
   private static correctPassportDate(value: string): string | null {
-    // Kadang-kadang huruf dalam bulan bisa disalah-interpretasikan menjadi digit.
+    // Sometimes, letters in the month part are interpreted as digits (O <=> 0) so we cannot simply use \w.
     const match = value.match(/([0-9]{2})\s*([\d\w]{3})\s*([0-9]{4})/);
     if (!match) return null;
     const day = match[1];
@@ -194,6 +203,10 @@ export default class PassportOCR {
     return `${day} ${month} ${year}`;
   }
 
+  /** Corrects passport types.
+   * 
+   *  If the passport type is a capital letter then it is returned, but if it isn't, then the most recent type in history is returned.
+   *  If there is no history and the value is invalid, then null is returned. */
   private static correctPassportType(value: string, history: string[] | undefined) {
     if (!value) return null;
     let type: string | undefined;
@@ -212,6 +225,8 @@ export default class PassportOCR {
     }
     return null;
   }
+
+  /** Corrects sex values outputted by the OCR. Values should be formatted as AA or A/A to be valid. */
   private static correctSex(value: string, history: string[] | undefined) {
     if (!value) return null;
     const match = value.toUpperCase().match(/([A-Z])\/*([A-Z])/);
@@ -255,6 +270,8 @@ export default class PassportOCR {
     this._scheduler = scheduler;
     return scheduler;
   }
+
+  /** Consider using this rather than manually calling ``this.canvas.getContext`` as this also sets willReadFrequently to true, allowing for quicker image data fetching. */
   get canvasContext(): CanvasRenderingContext2D {
     return this.canvas.getContext("2d", {
       willReadFrequently: true,
@@ -263,6 +280,8 @@ export default class PassportOCR {
   clearCanvas() {
     this.canvasContext.clearRect(0, 0, this.canvas.width, this.canvas.height);
   }
+
+  /** Helper method for finding words in a line. The words don't have to exactly match, as long as they are close enough. */
   private static findWordsInLine(line: Line, words: string[]): Record<string, Word> {
     const tracker = Object.create(null);
     const insensitiveWords = words.map(word => word.toLowerCase());
@@ -307,6 +326,7 @@ export default class PassportOCR {
   }
 
   async mountFile(file: File) {
+    // Load the image
     // https://stackoverflow.com/questions/32272904/converting-blob-file-data-to-imagedata-in-javascript
     const fileUrl = URL.createObjectURL(file);
     const image = new Image();
@@ -325,7 +345,7 @@ export default class PassportOCR {
     await this.locateViewArea();
   }
 
-  /** Mutates the canvas */
+  /** Locate the section of the image which contain the relevant information. This function will mutate the canvas. */
   private async locateViewArea() {
     const scheduler = await this.getScheduler();
     const ctx = this.canvasContext;
@@ -340,6 +360,8 @@ export default class PassportOCR {
     }
 
     {
+      // Translate is so that we can set the pivot point of the rotation to the top-left corner of the anchor.
+      // Note that this is just to draw a rectangle for debugging purposes. Feel free to remove this to save cycles.
       ctx.translate(viewRect.x0, viewRect.y0);
       ctx.rotate(p0.angle);
       ctx.strokeStyle = "green";
@@ -355,6 +377,7 @@ export default class PassportOCR {
     const oldImageData2 = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
 
     {
+      // Also for debug purposes. We assume that locateViewAreaTop has successfully identified the angle of the passport.
       ctx.strokeStyle = "green";
       ctx.strokeRect(0, 0, p1.x, p1.y);
       await this.debugImage();
@@ -367,17 +390,22 @@ export default class PassportOCR {
 
   private async locateViewAreaTop(scheduler: Scheduler, ctx: CanvasRenderingContext2D) {
     const imageData = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+    // This is tested using Vite and should also work with Webpack 5. If it doesn't, perhaps find a web worker module loader? 
     const worker = new Worker(new URL("./locator.worker.ts", import.meta.url), { type: 'module' });
     const procImage = await runWorker<OCRPreprocessMessageInput, OCRPreprocessMessageOutput>(worker, {
       width: imageData.width,
       height: imageData.height,
       data: imageData.data,
+      // Second parameter is of Transferable data types. Since ``imageData.data.buffer`` is an ArrayBuffer, it can be transferred over to the web worker rather than copied.
+      // That also means that imageData.data can no longer be used in this scope.
     }, [imageData.data.buffer]);
     ctx.putImageData(new ImageData(procImage, imageData.width, imageData.height), 0, 0);
     const imageUrl = this.canvas.toDataURL();
     await this.debugImage(imageUrl);
 
     const result = await scheduler.addJob("recognize", imageUrl);
+
+    // Find any of these words (note that republik and indonesia must both appear in the same line)
     let republikWord: Word | undefined, indonesiaWord: Word | undefined, pasporWord: Word | undefined;
     for (const line of result.data.lines) {
       const { republik, indonesia, paspor } = PassportOCR.findWordsInLine(line, ["republik", "indonesia", "paspor"]);
@@ -397,12 +425,10 @@ export default class PassportOCR {
       const indonesiaHeight = indonesiaWord.bbox.y1 - indonesiaWord.bbox.y0;
       const republikHeight = republikWord.bbox.y1 - republikWord.bbox.y0;
 
+      // Since "Republik" and "Indonesia" is supposed to be aligned, we can calculate how much the passport is rotated
       const angle = Math.atan2(
         ((indonesiaWord.bbox.y0 - republikWord.bbox.y0) + (indonesiaWord.bbox.y1 - republikWord.bbox.y1)) / 2 / this.canvas.height,
         (indonesiaWord.bbox.x1 - republikWord.bbox.x0) / this.canvas.width);
-
-      // Rotate y0 according to angle
-      // const y0 = -indonesiaWord.bbox.x1 * Math.sin(angle) + (indonesiaWord.bbox.y1 + indonesiaHeight) * Math.cos(angle);
 
       return {
         x: republikWord.bbox.x0 - (republikWord.bbox.x1 - republikWord.bbox.x0) * 0.1,
@@ -422,6 +448,7 @@ export default class PassportOCR {
         y: pasporWord.bbox.y1 - (height * 0.5),
         width: width * 3 * 2,
         height: width * 3 * 2,
+        // There's nothing to compare the "Paspor" word with, so uh, cowabunga.
         angle: 0
       }
     }
@@ -429,9 +456,14 @@ export default class PassportOCR {
     throw new Error("Cannot find top-left end of passport");
   }
 
-
+  /** Locate the bottom part of the passport, that being the identification numbers below the '<<<<<<<'.
+   * 
+   *  Note that Tesseract can hardly identify '<<<<<<' sequences (instead outputting gibberish),
+   *  which is why the bottom part of the passport is tracked by counting the digits on a line.
+   */
   private async locateViewAreaBottom(scheduler: Scheduler, ctx: CanvasRenderingContext2D) {
     const imageData = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+    // Run the preprocessing step. This will mutate the canvas for the rest of the OCR step. Keep that in mind if bugs happen.
     const preprocessWorker = new Worker(new URL("./preprocess.worker.ts", import.meta.url), { type: 'module' });
     const procImage = await runWorker<OCRPreprocessMessageInput, OCRPreprocessMessageOutput>(preprocessWorker, {
       width: imageData.width,
@@ -448,14 +480,14 @@ export default class PassportOCR {
     for (let i = 0; i < result.data.lines.length; i++) {
       const line = result.data.lines[i];
       let numberCount = 0;
-      const ZERO = '0'.charCodeAt(0);
       for (const chr of line.text) {
         const ascii = chr.charCodeAt(0);
-        if (ZERO <= ascii && ascii <= ZERO + 9) {
+        if (48 <= ascii && ascii <= 48 + 9) {
           numberCount++;
         }
       }
       if (numberCount > 8) {
+        // No short circuiting. We want to get the latest line since there's a possibility that "No. Reg" contains enough numbers to fulfill the condition.
         endOfPassport = i;
       }
     }
@@ -463,7 +495,10 @@ export default class PassportOCR {
     if (endOfPassport === -1) {
       throw new Error("Cannot find bottom-right end of passport");
     }
+
+    // Get 6 lines above the '<<<<<'
     const relevantLines = result.data.lines.slice(Math.max(endOfPassport - 7, 0), endOfPassport - 1);
+    // Get the median of the leftmost edge (x1) of all lines. This will be the representative x value.
     const rightEdges = relevantLines.slice(Math.max(0, relevantLines.length - 3), relevantLines.length).map(x => x.bbox.x1);
     rightEdges.sort((a, b) => a - b);
     const rightEdgesMedian = median(rightEdges);
@@ -474,12 +509,14 @@ export default class PassportOCR {
     }
   }
 
+  /** Perform OCR on a target. ``imgUrl`` can be retrieved from ``this.canvas.toDataURL()`` */
   private async readTarget(scheduler: Scheduler, target: OCRTarget, imgUrl: string) {
     const width = (target.bbox.x1 - target.bbox.x0) * this.canvas.width;
     const height = (target.bbox.y1 - target.bbox.y0) * this.canvas.height;
     const x = target.bbox.x0 * this.canvas.width;
     const y = target.bbox.y0 * this.canvas.height;
 
+    // With rectangle, we don't need to make explicit copies of the image. The same image can be passed to the scheduler.
     const result = await scheduler.addJob("recognize", imgUrl, {
       rectangle: {
         left: x,
@@ -488,8 +525,11 @@ export default class PassportOCR {
         height,
       }
     });
+    // Greedily grab the first line and hope for the best.
     return result.data.lines[0] ?? null;
   }
+
+  /** For debug purposes. Mark the target boxes on the canvas */
   private async markBoxes(boxes: Bbox[]) {
     const ctx = this.canvasContext;
     ctx.strokeStyle = "green"
@@ -497,6 +537,12 @@ export default class PassportOCR {
       ctx.strokeRect(box.x0, box.y0, box.x1 - box.x0, box.y1 - box.y0);
     }
   }
+
+  /** Processes a line outputted by the OCR.
+   *  If the original target has a corrector function, the corrector function will be invoked.
+   *  If it is a truthy value, the line will be compared with similar entries in its history to find the closest match.
+   *  Otherwise, the original line is returned.
+   */
   private processLine(key: keyof typeof PassportOCR.targets, line: Line) {
     let text: string | null = line.text.trim();
     const originalTarget = PassportOCR.targets[key];
@@ -514,6 +560,10 @@ export default class PassportOCR {
     return text;
   }
 
+  /** Updates the history with the CORRECTED version of the payload. Call this function after an employee has verified passport contents.
+   * 
+   *  This step is optional. However, previous corrected words can be used to correct the output of the OCR.
+   */
   updateHistory(payload: PassportOCRPayload): PassportOCRHistory {
     for (const rawKey of Object.keys(PassportOCR.targets)) {
       const key = rawKey as keyof typeof PassportOCR.targets;
@@ -541,14 +591,16 @@ export default class PassportOCR {
     return this.options.history;
   }
 
+  /** Performs OCR */
   async run(): Promise<PassportOCRPayload> {
     const scheduler = await this.getScheduler();
 
     const result: Record<string, Line> = {};
+    const imgUrl = this.canvas.toDataURL();
     await Promise.all(Object.keys(PassportOCR.targets).map(async (k) => {
       const key = k as keyof typeof PassportOCR.targets;
       const value = PassportOCR.targets[key];
-      result[key] = await this.readTarget(scheduler, value, this.canvas.toDataURL());
+      result[key] = await this.readTarget(scheduler, value, imgUrl);
     }))
     if (
       (!result.sex && result.sex2) ||
@@ -576,6 +628,7 @@ export default class PassportOCR {
     return payload as PassportOCRPayload;
   }
 
+  /** Cleans up all existing workers. Make sure to call this function when the page is closed */
   async terminate() {
     await this._scheduler?.terminate();
   }

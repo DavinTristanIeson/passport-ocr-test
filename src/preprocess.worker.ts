@@ -35,11 +35,17 @@ function deviationOf(data: Uint8ClampedArray, mean: number): number {
   return Math.sqrt(variance / (N - 1));
 }
 
+/** Convert the image to grayscale. Desaturated, dark values stay dark while everything else should be light. */
 function grayscale(data: Uint8ClampedArray) {
   for (let i = 0; i < data.length; i += 4) {
+    // Desaturated values have minor differences between the R, G, and B values.
+    // So ``diffRG``, ``diffRB``, and ``diffGB`` should be small (black) for desaturated colors.
     const [R, G, B] = [data[i], data[i + 1], data[i + 2]].map(x => x / 255);
     const [diffRG, diffRB, diffGB] = [R - G, R - B, G - B].map(x => Math.abs(x));
+    // Add bias for G and B since the label colors are blue-green, and we don't want them to interfere with the OCR.
     const saturationFactor = R * (diffRG + diffRB) + G * (diffRG + diffGB) * 1.2 + B * (diffRB + diffGB) * 1.2;
+    // No need to account for human eyesight with sensitivity factors, just divide by 3.
+    // Brightness is necessary to differentiate desaturated dark and desaturated light.
     const brightnessFactor = (R + G + B) / 3;
     const cellColor = Math.min(255, Math.max(0, (brightnessFactor + saturationFactor) * 255));
     for (let offset = 0; offset < 3; offset++) {
@@ -49,6 +55,7 @@ function grayscale(data: Uint8ClampedArray) {
   return data;
 }
 
+/** Same purpose as binarize in locator.worker.ts */
 function binarize(data: Uint8ClampedArray): Uint8ClampedArray {
   const brightness = brightnessOf(data);
   const deviation = deviationOf(data, brightness);
