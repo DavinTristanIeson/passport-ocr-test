@@ -1,3 +1,4 @@
+import { getDocument } from 'pdfjs-dist';
 import PassportOCR, { PassportOCRHistory } from './ocr';
 
 const ocrFileInput = document.querySelector<HTMLInputElement>("#ocr_file")!;
@@ -8,6 +9,8 @@ const ocrSourceImageContainer = document.querySelector<HTMLDivElement>("#ocr_src
 const ocrProcessedImageContainer = document.querySelector<HTMLDivElement>("#ocr_proc_img_container")!;
 const ocrCorrectResultButton = document.querySelector<HTMLButtonElement>("#ocr_correct_result")!;
 const ocrHistoryTable = document.querySelector<HTMLTableElement>("#ocr_history")!;
+const temporaryCanvas = document.createElement("canvas");
+
 
 const history: PassportOCRHistory = {};
 
@@ -28,7 +31,21 @@ ocrFileInput.addEventListener("input", async (ev) => {
   OCR.clearCanvas();
   if (!file) return;
   const img = document.createElement("img");
-  img.src = URL.createObjectURL(file);
+  if (file.type === "application/pdf") {
+    const pdf = await getDocument(await file.arrayBuffer()).promise;
+    const firstPage = await pdf.getPage(1);
+    const viewport = firstPage.getViewport({
+      scale: 1,
+    });
+
+    temporaryCanvas.width = viewport.width;
+    temporaryCanvas.height = viewport.height;
+    const canvasContext = temporaryCanvas.getContext('2d')!;
+    await firstPage.render({ canvasContext, viewport }).promise;
+    img.src = temporaryCanvas.toDataURL();
+  } else {
+    img.src = URL.createObjectURL(file);
+  }
   img.alt = file.name;
   ocrSourceImageContainer.appendChild(img);
 });
@@ -41,7 +58,11 @@ ocrExecuteButton.addEventListener("click", async () => {
   ocrExecuteButton.disabled = true;
   try {
     const file = ocrFileInput.files![0];
-    await OCR.mountFile(file);
+    if (file.type === 'application/pdf') {
+      await OCR.mountPdfFile(file);
+    } else {
+      await OCR.mountImageFile(file);
+    }
 
     const result = await OCR.run();
 

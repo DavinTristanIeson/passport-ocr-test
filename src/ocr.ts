@@ -1,6 +1,9 @@
 import { type ImageLike, createScheduler, type Bbox, createWorker, Scheduler, RecognizeResult, Word, Line } from "tesseract.js";
 import { closest, distance } from 'fastest-levenshtein';
 import { OCRPreprocessMessageInput, OCRPreprocessMessageOutput } from "./preprocess.worker";
+import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
+// If you're bundling pdf.js along with the rest of the code, the worker needs to be loaded so that the bundler is aware of it.
+import 'pdfjs-dist/build/pdf.worker.min.mjs';
 
 function getObjectUrlOfImageData(data: ImageData, width: number, height: number): string {
   const tempCanvas = document.createElement("canvas");
@@ -325,22 +328,40 @@ export default class PassportOCR {
     return cropped;
   }
 
-  async mountFile(file: File) {
+  async mountImageFile(file: File) {
     // Load the image
     // https://stackoverflow.com/questions/32272904/converting-blob-file-data-to-imagedata-in-javascript
     const fileUrl = URL.createObjectURL(file);
     const image = new Image();
     image.src = fileUrl;
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
       image.onload = () => {
         this.canvas.width = image.width;
         this.canvas.height = image.height;
         URL.revokeObjectURL(fileUrl);
         resolve();
       }
+      image.onerror = reject;
     });
     const ctx = this.canvasContext;
     ctx.drawImage(image, 0, 0);
+
+    await this.locateViewArea();
+  }
+  async mountPdfFile(file: File) {
+    const pdf = await getDocument(await file.arrayBuffer()).promise;
+    const firstPage = await pdf.getPage(1);
+    // Sometimes, the passport is really small in the pdf file. By increasing the scale of the pdf file, the text should hopefully be more legible.
+    const viewport = firstPage.getViewport({
+      scale: 1.5,
+    });
+    this.canvas.width = viewport.width;
+    this.canvas.height = viewport.height;
+    console.log(viewport);
+    await firstPage.render({
+      canvasContext: this.canvasContext,
+      viewport,
+    }).promise;
 
     await this.locateViewArea();
   }
