@@ -43,7 +43,7 @@ function grayscale(data: Uint8ClampedArray) {
     const [R, G, B] = [data[i], data[i + 1], data[i + 2]].map(x => x / 255);
     const [diffRG, diffRB, diffGB] = [R - G, R - B, G - B].map(x => Math.abs(x));
     // Add bias for G and B since the label colors are blue-green, and we don't want them to interfere with the OCR.
-    const saturationFactor = R * (diffRG + diffRB) + G * (diffRG + diffGB) * 1.2 + B * (diffRB + diffGB) * 1.2;
+    const saturationFactor = R * (diffRG + diffRB) * 0.7 + G * (diffRG + diffGB) * 0.7 + B * (diffRB + diffGB) * 0.7;
     // No need to account for human eyesight with sensitivity factors, just divide by 3.
     // Brightness is necessary to differentiate desaturated dark and desaturated light.
     const brightnessFactor = (R + G + B) / 3;

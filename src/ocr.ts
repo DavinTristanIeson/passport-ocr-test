@@ -101,10 +101,10 @@ export default class PassportOCR {
     } as OCRTarget,
     nationality: {
       bbox: {
-        x0: 0.010,
+        x0: 0.000,
         y0: 0.380,
         x1: 0.780,
-        y1: 0.500,
+        y1: 0.520,
       },
       corrector: true,
     } as OCRTarget,
@@ -113,7 +113,7 @@ export default class PassportOCR {
         x0: 0.000,
         y0: 0.540,
         x1: 0.350,
-        y1: 0.660,
+        y1: 0.680,
       },
       corrector: PassportOCR.correctPassportDate,
     } as OCRTarget,
@@ -122,7 +122,7 @@ export default class PassportOCR {
         x0: 0.360,
         y0: 0.540,
         x1: 0.540,
-        y1: 0.660,
+        y1: 0.680,
       },
       corrector: PassportOCR.correctSex,
     } as OCRTarget,
@@ -131,7 +131,7 @@ export default class PassportOCR {
         x0: 0.560,
         y0: 0.540,
         x1: 1,
-        y1: 0.660
+        y1: 0.680
       },
       corrector: true,
     } as OCRTarget,
@@ -140,7 +140,7 @@ export default class PassportOCR {
         x0: 0.000,
         y0: 0.700,
         x1: 0.350,
-        y1: 0.820,
+        y1: 0.840,
       },
       corrector: PassportOCR.correctPassportDate,
     } as OCRTarget,
@@ -149,14 +149,14 @@ export default class PassportOCR {
         x0: 0.640,
         y0: 0.700,
         x1: 1,
-        y1: 0.820,
+        y1: 0.840,
       },
       corrector: PassportOCR.correctPassportDate,
     } as OCRTarget,
     regNumber: {
       bbox: {
         x0: 0.000,
-        y0: 0.880,
+        y0: 0.860,
         x1: 0.500,
         y1: 1,
       },
@@ -164,7 +164,7 @@ export default class PassportOCR {
     issuingOffice: {
       bbox: {
         x0: 0.500,
-        y0: 0.880,
+        y0: 0.860,
         x1: 1,
         y1: 1,
       },
@@ -422,8 +422,7 @@ export default class PassportOCR {
     // SCENARIO #1: REPUBLIK INDONESIA is found. x0 is always aligned with relevant section.
     if (republikWord && indonesiaWord) {
       const width = (indonesiaWord.bbox.x1 - republikWord.bbox.x0);
-      const indonesiaHeight = indonesiaWord.bbox.y1 - indonesiaWord.bbox.y0;
-      const republikHeight = republikWord.bbox.y1 - republikWord.bbox.y0;
+      const republikWidth = (republikWord.bbox.x1 - republikWord.bbox.x0);
 
       // Since "Republik" and "Indonesia" is supposed to be aligned, we can calculate how much the passport is rotated
       const angle = Math.atan2(
@@ -431,8 +430,9 @@ export default class PassportOCR {
         (indonesiaWord.bbox.x1 - republikWord.bbox.x0) / this.canvas.width);
 
       return {
-        x: republikWord.bbox.x0 - (republikWord.bbox.x1 - republikWord.bbox.x0) * 0.1,
-        y: republikWord.bbox.y1 + republikHeight,
+        x: republikWord.bbox.x0 - republikWidth * 0.1,
+        // Don't use y1 since it can extend to the "Republic of Indonesia" subtitle. Height is also influenced by this
+        y: republikWord.bbox.y0 + (republikWidth * 0.3),
         // Predicted width and height. This doesn't have to be accurate, but just enough so that locateViewAreaBottom can find the last two lines in the passport.
         width: width * 2.2,
         height: width * 2.2,
@@ -584,7 +584,7 @@ export default class PassportOCR {
       if (!history.find(word => word === value)) {
         history.push(value);
         if (history.length > this.options.historyLimit) {
-          history.unshift();
+          history.shift();
         }
       }
     }
