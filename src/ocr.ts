@@ -5,13 +5,13 @@ import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
 // If you're bundling pdf.js along with the rest of the code, the worker needs to be loaded so that the bundler is aware of it.
 import 'pdfjs-dist/build/pdf.worker.min.mjs';
 
-function getObjectUrlOfImageData(data: ImageData, width: number, height: number): string {
+function copyImageData(data: ImageData, width: number, height: number): HTMLCanvasElement {
   const tempCanvas = document.createElement("canvas");
   tempCanvas.width = width;
   tempCanvas.height = height;
   const tempCtx = tempCanvas.getContext('2d')!;
   tempCtx.putImageData(data, 0, 0);
-  return tempCanvas.toDataURL();
+  return tempCanvas;
 }
 
 function runWorker<TInput, TOutput>(worker: Worker, input: TInput, transfer?: Transferable[]): Promise<TOutput> {
@@ -32,6 +32,7 @@ function median(arr: number[]) {
 
 type OCRTarget = {
   bbox: Bbox;
+  isDate?: boolean;
   corrector?: ((value: string, history: string[] | undefined) => string | null) | boolean;
 }
 
@@ -118,6 +119,7 @@ export default class PassportOCR {
         x1: 0.350,
         y1: 0.680,
       },
+      isDate: true,
       corrector: PassportOCR.correctPassportDate,
     } as OCRTarget,
     sex2: {
@@ -145,6 +147,7 @@ export default class PassportOCR {
         x1: 0.350,
         y1: 0.840,
       },
+      isDate: true,
       corrector: PassportOCR.correctPassportDate,
     } as OCRTarget,
     dateOfExpiry: {
@@ -154,6 +157,7 @@ export default class PassportOCR {
         x1: 1,
         y1: 0.840,
       },
+      isDate: true,
       corrector: PassportOCR.correctPassportDate,
     } as OCRTarget,
     regNumber: {
@@ -208,9 +212,8 @@ export default class PassportOCR {
 
   /** Corrects passport types.
    * 
-   *  If the passport type is a capital letter then it is returned, but if it isn't, then the most recent type in history is returned.
-   *  If there is no history and the value is invalid, then null is returned. */
-  private static correctPassportType(value: string, history: string[] | undefined) {
+   *  If the passport type is a capital letter then it is returned, but if it isn't, null. */
+  private static correctPassportType(value: string) {
     if (!value) return null;
     let type: string | undefined;
     for (const chr of value.toUpperCase()) {
@@ -222,9 +225,6 @@ export default class PassportOCR {
     }
     if (type) {
       return type;
-    }
-    if (history && history.length > 0) {
-      return history[history.length - 1];
     }
     return null;
   }
@@ -244,10 +244,12 @@ export default class PassportOCR {
     return sex;
   }
 
-  private async debugImage(imageUrl?: string) {
+  private async debugImage(imageUrl?: string, wait?: number) {
     if (this.options.onProcessImage) {
       await this.options.onProcessImage(imageUrl || this.canvas.toDataURL());
-      // await new Promise((resolve) => setTimeout(resolve, 5000));
+      if (wait) {
+        await new Promise((resolve) => setTimeout(resolve, wait));
+      }
     }
   }
   private async getScheduler(): Promise<Scheduler> {
@@ -303,27 +305,52 @@ export default class PassportOCR {
     return tracker;
   }
 
-  private cropCanvas(box: Bbox, angle: number): ImageData {
-    const width = box.x1 - box.x0;
-    const height = box.y1 - box.y0;
-    const ctx = this.canvasContext;
+  private rotateCanvas(pivot: { x: number, y: number, angle: number }, targetCanvas?: HTMLCanvasElement) {
+    const canvas = targetCanvas ?? this.canvas;
+    const ctx = targetCanvas ? targetCanvas.getContext('2d', {
+      willReadFrequently: true
+    })! : this.canvasContext;
 
     const tempCanvas = document.createElement("canvas");
-    tempCanvas.width = this.canvas.width;
-    tempCanvas.height = this.canvas.height;
+    tempCanvas.width = canvas.width;
+    tempCanvas.height = canvas.height;
+    const tempCtx = tempCanvas.getContext('2d', {
+      willReadFrequently: true,
+    })!;
+    tempCtx.translate(-pivot.x, -pivot.y);
+    tempCtx.rotate(-pivot.angle);
+    tempCtx.drawImage(canvas, pivot.x, pivot.y);
+    tempCtx.translate(pivot.x, pivot.y);
+    tempCtx.resetTransform();
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(tempCanvas, 0, 0);
+  }
+
+  /** Mutates ``targetCanvas`` with the cropped image. If no ``targetCanvas`` is provided, the canvas element used for OCR will be used instead. */
+  private cropCanvas(box: Bbox, angle: number, targetCanvas?: HTMLCanvasElement): ImageData {
+    const width = box.x1 - box.x0;
+    const height = box.y1 - box.y0;
+    const canvas = targetCanvas ?? this.canvas;
+    const ctx = targetCanvas ? targetCanvas.getContext('2d', {
+      willReadFrequently: true
+    })! : this.canvasContext;
+    const tempCanvas = document.createElement("canvas");
+    tempCanvas.width = canvas.width;
+    tempCanvas.height = canvas.height;
     const tempCtx = tempCanvas.getContext('2d', {
       willReadFrequently: true,
     })!;
     tempCtx.translate(-box.x0, -box.y0);
     tempCtx.rotate(-angle);
-    tempCtx.drawImage(this.canvas, 0, 0);
+    tempCtx.drawImage(canvas, 0, 0);
 
-    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(tempCanvas, 0, 0);
     const cropped = ctx.getImageData(0, 0, width, height);
     ctx.resetTransform();
-    this.canvas.width = width;
-    this.canvas.height = height;
+    canvas.width = width;
+    canvas.height = height;
     ctx.putImageData(cropped, 0, 0);
     return cropped;
   }
@@ -345,8 +372,6 @@ export default class PassportOCR {
     });
     const ctx = this.canvasContext;
     ctx.drawImage(image, 0, 0);
-
-    await this.locateViewArea();
   }
   async mountPdfFile(file: File) {
     const pdf = await getDocument(await file.arrayBuffer()).promise;
@@ -357,13 +382,10 @@ export default class PassportOCR {
     });
     this.canvas.width = viewport.width;
     this.canvas.height = viewport.height;
-    console.log(viewport);
     await firstPage.render({
       canvasContext: this.canvasContext,
       viewport,
     }).promise;
-
-    await this.locateViewArea();
   }
 
   /** Locate the section of the image which contain the relevant information. This function will mutate the canvas. */
@@ -392,6 +414,8 @@ export default class PassportOCR {
     }
     ctx.putImageData(oldImageData, 0, 0);
 
+    // Backup original image
+    const tempCanvas = copyImageData(ctx.getImageData(0, 0, this.canvas.width, this.canvas.height), this.canvas.width, this.canvas.height);
     this.cropCanvas(viewRect, viewRect.angle);
     await this.debugImage();
     const p1 = await this.locateViewAreaBottom(scheduler, ctx);
@@ -407,6 +431,25 @@ export default class PassportOCR {
     this.canvas.height = p1.y;
     ctx.putImageData(oldImageData2, 0, 0);
     await this.debugImage();
+
+    // bad code but who cares
+    // Passport number can be retrieved from the bottom-left section of the passport, but that part is cropped off after ``locateViewAreaTop``.
+    // To locate said section, we also need p1.y to mark the baseline.
+    // Because of those two reasons, we have to capture p0 and p1 in a closure. This closure will then be called when running the OCR.
+    return () => {
+      const endHeight = p1.endY1 - p1.endY0;
+      return this.getPassportNumberAlternative(scheduler, tempCanvas, {
+        x0: Math.max(0, p0.x - (p0.wordWidth * 0.9)),
+        x1: p0.x,
+        // add some padding
+        y0: p1.endY0 + p0.y - endHeight * 0.5,
+        y1: p1.endY1 + p0.y + endHeight * 0.5,
+      }, {
+        x: p0.x,
+        y: p1.y,
+        angle: p0.angle,
+      });
+    };
   }
 
   private async locateViewAreaTop(scheduler: Scheduler, ctx: CanvasRenderingContext2D) {
@@ -457,6 +500,7 @@ export default class PassportOCR {
         // Predicted width and height. This doesn't have to be accurate, but just enough so that locateViewAreaBottom can find the last two lines in the passport.
         width: width * 2.2,
         height: width * 2.2,
+        wordWidth: width,
         angle,
       }
     }
@@ -469,6 +513,7 @@ export default class PassportOCR {
         y: pasporWord.bbox.y1 - (height * 0.5),
         width: width * 3 * 2,
         height: width * 3 * 2,
+        wordWidth: width * 3,
         // There's nothing to compare the "Paspor" word with, so uh, cowabunga.
         angle: 0
       }
@@ -497,6 +542,7 @@ export default class PassportOCR {
     const result = await scheduler.addJob("recognize", this.canvas.toDataURL());
 
     let endOfPassport = -1;
+    let endOfPassportLine: Line | undefined;
     // Find the line with the most digits (that's probably the bottom-most line in the passport)
     for (let i = 0; i < result.data.lines.length; i++) {
       const line = result.data.lines[i];
@@ -510,10 +556,11 @@ export default class PassportOCR {
       if (numberCount > 8) {
         // No short circuiting. We want to get the latest line since there's a possibility that "No. Reg" contains enough numbers to fulfill the condition.
         endOfPassport = i;
+        endOfPassportLine = line;
       }
     }
 
-    if (endOfPassport === -1) {
+    if (endOfPassport === -1 || !endOfPassportLine) {
       throw new Error("Cannot find bottom-right end of passport");
     }
 
@@ -527,11 +574,49 @@ export default class PassportOCR {
     return {
       x: rightEdgesMedian,
       y: relevantLines[relevantLines.length - 1].bbox.y1,
+      endY0: endOfPassportLine.bbox.y0,
+      endY1: endOfPassportLine.bbox.y1,
     }
   }
 
+  /** Alternative way of fetching passport number
+   *  Due to the reflective garuda picture near the passport number, the passport number tends to be obscured by reflection when its photo is taken.
+   *  Fortunately, passport number can also be fetched from the bottommost line on the passport.
+   *  Unfortunately, our cropping mechanism will cut that part out of the view section, which is why both box and pivot needs to be provided for rotation and cropping.
+   */
+  private async getPassportNumberAlternative(scheduler: Scheduler, canvas: HTMLCanvasElement, box: Bbox, pivot: {
+    x: number,
+    y: number,
+    angle: number,
+  }) {
+    const ctx = canvas.getContext('2d', {
+      willReadFrequently: true,
+    })!;
+    this.rotateCanvas(pivot, canvas);
+    this.cropCanvas(box, 0, canvas);
+    await this.debugImage(canvas.toDataURL());
+
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const preprocessWorker = new Worker(new URL("./preprocess.worker.ts", import.meta.url), { type: 'module' });
+    const procImage = await runWorker<OCRPreprocessMessageInput, OCRPreprocessMessageOutput>(preprocessWorker, {
+      width: imageData.width,
+      height: imageData.height,
+      data: imageData.data,
+    }, [imageData.data.buffer]);
+    ctx.putImageData(new ImageData(procImage, imageData.width, imageData.height), 0, 0);
+    const imgUrl = canvas.toDataURL();
+    await this.debugImage(imgUrl);
+
+    const result = await scheduler.addJob("recognize", imgUrl);
+    if (result.data.lines.length === 0) {
+      return null;
+    }
+    const line = result.data.lines[result.data.lines.length - 1];
+    return line;
+  }
+
   /** Perform OCR on a target. ``imgUrl`` can be retrieved from ``this.canvas.toDataURL()`` */
-  private async readTarget(scheduler: Scheduler, target: OCRTarget, imgUrl: string) {
+  private async readTarget(scheduler: Scheduler, target: OCRTarget, imgUrl: string): Promise<Line | null> {
     const width = (target.bbox.x1 - target.bbox.x0) * this.canvas.width;
     const height = (target.bbox.y1 - target.bbox.y0) * this.canvas.height;
     const x = target.bbox.x0 * this.canvas.width;
@@ -614,21 +699,37 @@ export default class PassportOCR {
 
   /** Performs OCR */
   async run(): Promise<PassportOCRPayload> {
+    const getPassportNumberAlt = await this.locateViewArea();
     const scheduler = await this.getScheduler();
 
-    const result: Record<string, Line> = {};
+    const result: Record<string, Line | null> = {};
     const imgUrl = this.canvas.toDataURL();
-    await Promise.all(Object.keys(PassportOCR.targets).map(async (k) => {
+    const promises = Object.keys(PassportOCR.targets).map(async (k) => {
       const key = k as keyof typeof PassportOCR.targets;
       const value = PassportOCR.targets[key];
       result[key] = await this.readTarget(scheduler, value, imgUrl);
-    }))
+    });
+
+    promises.push(new Promise(async (resolve) => {
+      const passnum = await getPassportNumberAlt();
+      result.passportNumber2 = passnum ? {
+        ...passnum,
+        text: passnum.text.trim().substring(0, 8),
+      } : null;
+      resolve();
+    }));
+    await Promise.all(promises);
+    console.log(result.passportNumber, result.passportNumber2);
+    if ((!result.passportNumber && result.passportNumber2) || (result.passportNumber && result.passportNumber2 && result.passportNumber.confidence <= result.passportNumber2.confidence)) {
+      result.passportNumber = result.passportNumber2;
+    }
     if (
       (!result.sex && result.sex2) ||
       (result.sex && result.sex2 && result.sex.confidence < result.sex2.confidence)) {
       result.sex = result.sex2;
     }
     delete result.sex2;
+    delete result.passportNumber2;
 
     this.markBoxes(Object.keys(PassportOCR.targets).map((key) => {
       const { bbox } = PassportOCR.targets[key as keyof typeof PassportOCR.targets];
@@ -643,7 +744,8 @@ export default class PassportOCR {
 
     const payload: Record<string, string | null> = {};
     for (const key of Object.keys(result)) {
-      payload[key] = result[key] ? this.processLine(key as keyof typeof PassportOCR.targets, result[key]) : null;
+      const value = result[key];
+      payload[key] = value ? this.processLine(key as keyof typeof PassportOCR.targets, value) : null;
     }
 
     return payload as PassportOCRPayload;
