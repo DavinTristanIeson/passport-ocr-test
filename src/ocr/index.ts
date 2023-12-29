@@ -103,11 +103,11 @@ export default abstract class OCR<TTarget extends Record<string, any>> {
   }
 
   protected async debugImage(imageUrl?: string, wait?: number) {
-    // if (this.options.onProcessImage) {
-    //   await this.options.onProcessImage(imageUrl || this.canvas.toDataURL());
-    //   if (wait) {
-    //     await new Promise((resolve) => setTimeout(resolve, wait));
-    //   }
-    // }
+    if (this.options.onProcessImage) {
+      await this.options.onProcessImage(imageUrl || this.canvas.toDataURL());
+      if (wait) {
+        await new Promise((resolve) => setTimeout(resolve, wait));
+      }
+    }
   }
 }

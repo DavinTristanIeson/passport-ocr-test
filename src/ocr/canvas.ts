@@ -169,4 +169,30 @@ export default class OCRCanvas {
     const top = bbox.y0 * this.canvas.height;
     return { left, top, width, height };
   }
+
+  /** Returns rectangles that splits the canvas into overlapping sections. With a side of 2, the canvas will be split into 9 cells, with a section taking care of 4 adjacent cells.
+   * 
+   *  For example, with:
+   *  ```
+   *  A1 B1 C1
+   *  A2 B2 C2
+   *  A3 B3 C3
+   *  ```
+   *  sections[0] will include A1, B1, A2, B2, while sections[1] will include B1, C1, B2, C2, and sections[2] includes A2, B2, A3, B3.
+   */
+  distributeSections(side: number): Rectangle[] {
+    const offset = 1 / (side + 1)
+    return Array.from({ length: side * side }, (_, i) => {
+      const row = Math.floor(i / side);
+      const col = i % side;
+      const x0 = col * offset;
+      const y0 = row * offset;
+      return {
+        x0,
+        y0,
+        x1: x0 + offset * 2,
+        y1: y0 + offset * 2,
+      } as Bbox;
+    }).map(x => this.getCanvasRectFromRelativeRect(x));
+  }
 }

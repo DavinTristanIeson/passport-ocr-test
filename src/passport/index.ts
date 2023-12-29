@@ -52,7 +52,7 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets> {
     if (this._scheduler !== undefined) {
       return this._scheduler;
     }
-    const WORKER_COUNT = 3;
+    const WORKER_COUNT = 4;
     const scheduler = await createScheduler();
     const promisedWorkers = Array.from({ length: WORKER_COUNT }, async (_, i) => {
       const worker = await createWorker("ind", undefined, undefined, {
@@ -134,16 +134,6 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets> {
       angle: p0.angle,
     }
 
-    {
-      // Translate is so that we can set the pivot point of the rotation to the top-left corner of the anchor.
-      // Note that this is just to draw a rectangle for debugging purposes. Feel free to remove this to save cycles.
-      ctx.translate(viewRect.x0, viewRect.y0);
-      ctx.rotate(p0.angle);
-      ctx.strokeStyle = "green";
-      ctx.strokeRect(0, 0, viewRect.x1 - viewRect.x0, viewRect.y1 - viewRect.y0);
-      ctx.resetTransform();
-      await this.debugImage();
-    }
     ctx.putImageData(oldImageData, 0, 0);
 
     // Backup original image
@@ -153,12 +143,6 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets> {
     const p1 = await this.locateViewAreaBottom(scheduler, ctx);
     const oldImageData2 = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
 
-    {
-      // Also for debug purposes. We assume that locateViewAreaTop has successfully identified the angle of the passport.
-      ctx.strokeStyle = "green";
-      ctx.strokeRect(0, 0, p1.x, p1.y);
-      await this.debugImage();
-    }
     this.canvas.width = p1.x;
     this.canvas.height = p1.y;
     ctx.putImageData(oldImageData2, 0, 0);
@@ -271,7 +255,14 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets> {
     ctx.putImageData(new ImageData(procImage, imageData.width, imageData.height), 0, 0);
     await this.debugImage();
 
-    const result = await scheduler.addJob("recognize", this.canvas.toDataURL());
+    const result = await scheduler.addJob("recognize", this.canvas.toDataURL(), {
+      rectangle: this.canvas.getCanvasRectFromRelativeRect({
+        x0: 0.5,
+        x1: 1,
+        y0: 0,
+        y1: 1,
+      })
+    });
 
     let endOfPassport = -1;
     let endOfPassportLine: Line | undefined;

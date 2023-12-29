@@ -15,7 +15,7 @@ function brightnessOf(data: Uint8ClampedArray): number {
     const R = data[i] * RED_INTENCITY_COEF;
     const G = data[i + 1] * GREEN_INTENCITY_COEF;
     const B = data[i + 2] * BLUE_INTENCITY_COEF;
-    brightnessSum += Math.min(255, Math.max(0, R + G + B));
+    brightnessSum += R + G + B;
   }
   return brightnessSum / N;
 }
@@ -30,23 +30,29 @@ function deviationOf(data: Uint8ClampedArray, mean: number): number {
     const G = data[i + 1] * GREEN_INTENCITY_COEF;
     const B = data[i + 2] * BLUE_INTENCITY_COEF;
     const grey = Math.min(255, Math.max(0, R + G + B));
-    variance += Math.pow(grey - mean, 2);
+    const diff = grey - mean;
+    variance += diff * diff;
   }
   return Math.sqrt(variance / (N - 1));
 }
 
 /** Convert the image to grayscale. Desaturated, dark values stay dark while everything else should be light. */
 function grayscale(data: Uint8ClampedArray) {
+  const normalizationFactor = 1 / 255;
   for (let i = 0; i < data.length; i += 4) {
+    const R = data[i] * normalizationFactor;
+    const G = data[i + 1] * normalizationFactor;
+    const B = data[i + 2] * normalizationFactor;
     // Desaturated values have minor differences between the R, G, and B values.
     // So ``diffRG``, ``diffRB``, and ``diffGB`` should be small (black) for desaturated colors.
-    const [R, G, B] = [data[i], data[i + 1], data[i + 2]].map(x => x / 255);
-    const [diffRG, diffRB, diffGB] = [R - G, R - B, G - B].map(x => Math.abs(x));
+    const diffRG = Math.abs(R - G);
+    const diffRB = Math.abs(R - B);
+    const diffGB = Math.abs(G - B);
     // Add bias for G and B since the label colors are blue-green, and we don't want them to interfere with the OCR.
     const saturationFactor = R * (diffRG + diffRB) * 0.7 + G * (diffRG + diffGB) * 0.7 + B * (diffRB + diffGB) * 0.7;
     // No need to account for human eyesight with sensitivity factors, just divide by 3.
     // Brightness is necessary to differentiate desaturated dark and desaturated light.
-    const brightnessFactor = (R + G + B) / 3;
+    const brightnessFactor = (R + G + B) * 0.333333;
     const cellColor = Math.min(255, Math.max(0, (brightnessFactor + saturationFactor) * 255));
     for (let offset = 0; offset < 3; offset++) {
       data[i + offset] = cellColor;
