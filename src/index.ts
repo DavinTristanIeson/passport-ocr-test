@@ -1,5 +1,6 @@
 import { getDocument } from 'pdfjs-dist';
-import PassportOCR, { PassportOCRHistory } from './ocr';
+import PassportOCR from './passport';
+import type { PassportOCRHistory } from './passport/targets';
 
 const ocrFileInput = document.querySelector<HTMLInputElement>("#ocr_file")!;
 const ocrExecuteButton = document.querySelector<HTMLButtonElement>("#ocr_exec")!;
@@ -28,7 +29,7 @@ const OCR = new PassportOCR({
 ocrFileInput.addEventListener("input", async (ev) => {
   const file = (ev.target as HTMLInputElement).files?.[0];
   ocrSourceImageContainer.innerHTML = '';
-  OCR.clearCanvas();
+  OCR.canvas.clear();
   if (!file) return;
   const img = document.createElement("img");
   if (file.type === "application/pdf") {
@@ -58,12 +59,7 @@ ocrExecuteButton.addEventListener("click", async () => {
   ocrExecuteButton.disabled = true;
   try {
     const file = ocrFileInput.files![0];
-    if (file.type === 'application/pdf') {
-      await OCR.mountPdfFile(file);
-    } else {
-      await OCR.mountImageFile(file);
-    }
-
+    await OCR.mountFile(file);
     const result = await OCR.run();
 
     ocrResultTextarea.value = JSON.stringify(result);
