@@ -1,4 +1,4 @@
-import { type ImageLike, createScheduler, type Bbox, createWorker, Scheduler, RecognizeResult, Word, Line } from "tesseract.js";
+import { type ImageLike, createScheduler, type Bbox, createWorker, Scheduler, RecognizeResult, Word, Line, Rectangle } from "tesseract.js";
 import { closest, distance } from 'fastest-levenshtein';
 import { OCRPreprocessMessageInput, OCRPreprocessMessageOutput } from "./preprocess.worker";
 import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
@@ -30,11 +30,16 @@ function median(arr: number[]) {
   }
 }
 
+function pad0(num: number): string {
+  return (num < 10 ? `0${num}` : num.toString());
+}
+
 type OCRTarget = {
   bbox: Bbox;
   isDate?: boolean;
   corrector?: ((value: string, history: string[] | undefined) => string | null) | boolean;
 }
+type OCRTargetReadResult = { text: string, confidence: number };
 
 export type PassportOCRPayload = {
   [key in keyof typeof PassportOCR.targets]: string | null;
@@ -184,10 +189,12 @@ export default class PassportOCR {
   canvas: HTMLCanvasElement;
   /** The Tesseract Scheduler used to perform OCR tasks. Prefer using getScheduler as there's no guarantee that ``_scheduler`` is initialized when you use it. */
   _scheduler: Scheduler | undefined;
+  _numberScheduler: Scheduler | undefined;
   options: PassportOCROptions;
   constructor(options?: Partial<PassportOCROptions>) {
     this.canvas = document.createElement("canvas");
     this.getScheduler();
+    this.getNumberScheduler();
     this.options = {
       onProcessImage: options?.onProcessImage,
       history: options?.history ?? Object.create(null),
@@ -198,16 +205,20 @@ export default class PassportOCR {
   /** Corrects passport dates. Day and year must be numbers, but there's a loose word comparison for the month part. */
   private static correctPassportDate(value: string): string | null {
     // Sometimes, letters in the month part are interpreted as digits (O <=> 0) so we cannot simply use \w.
-    const match = value.match(/([0-9]{2})\s*([\d\w]{3})\s*([0-9]{4})/);
+    const match = value.match(/([0-9]{1,2})\s*([\d\w]{3})\s*([0-9]{4})/);
     if (!match) return null;
-    const day = match[1];
-    const rawMonth = match[2];
-    const year = match[3];
-    const month = closest(rawMonth, PassportOCR.MONTHS);
-    if (isNaN(parseInt(day, 10)) || isNaN(parseInt(year, 10))) {
+    const day = parseInt(match[1]);
+    const rawMonth = match[2].toUpperCase();
+    const year = parseInt(match[3]);
+    const closestMonth = closest(rawMonth, PassportOCR.MONTHS);
+    const month = distance(rawMonth, closestMonth) <= 2 ? closestMonth : null;
+    if (isNaN(day) || isNaN(year) || !month) {
       return null;
     }
-    return `${day} ${month} ${year}`;
+    if (day < 1 || day > 31 || year < 1900 || year > 2200) {
+      return null;
+    }
+    return `${pad0(day)} ${month} ${year}`;
   }
 
   /** Corrects passport types.
@@ -252,11 +263,12 @@ export default class PassportOCR {
       }
     }
   }
+
   private async getScheduler(): Promise<Scheduler> {
     if (this._scheduler !== undefined) {
       return this._scheduler;
     }
-    const WORKER_COUNT = 4;
+    const WORKER_COUNT = 3;
     const scheduler = await createScheduler();
     const promisedWorkers = Array.from({ length: WORKER_COUNT }, async (_, i) => {
       const worker = await createWorker("ind", undefined, undefined, {
@@ -266,6 +278,9 @@ export default class PassportOCR {
         load_freq_dawg: '0',
         load_number_dawg: '0',
       });
+      await worker.setParameters({
+        tessedit_char_blacklist: `,."'`
+      });
       return worker;
     });
     const workers = await Promise.all(promisedWorkers);
@@ -273,6 +288,32 @@ export default class PassportOCR {
       scheduler.addWorker(worker);
     }
     this._scheduler = scheduler;
+    return scheduler;
+  }
+
+  private async getNumberScheduler(): Promise<Scheduler> {
+    if (this._numberScheduler !== undefined) {
+      return this._numberScheduler;
+    }
+    const WORKER_COUNT = 2;
+    const scheduler = await createScheduler();
+    const promisedWorkers = Array.from({ length: WORKER_COUNT }, async () => {
+      const worker = await createWorker("ind", undefined, undefined, {
+        load_system_dawg: '0',
+        load_freq_dawg: '0',
+        load_number_dawg: '0',
+      });
+      // This scheduler will only track numbers
+      await worker.setParameters({
+        tessedit_char_whitelist: '0123456789',
+      });
+      return worker;
+    });
+    const workers = await Promise.all(promisedWorkers);
+    for (const worker of workers) {
+      scheduler.addWorker(worker);
+    }
+    this._numberScheduler = scheduler;
     return scheduler;
   }
 
@@ -588,7 +629,7 @@ export default class PassportOCR {
     x: number,
     y: number,
     angle: number,
-  }) {
+  }): Promise<OCRTargetReadResult | null> {
     const ctx = canvas.getContext('2d', {
       willReadFrequently: true,
     })!;
@@ -612,35 +653,114 @@ export default class PassportOCR {
       return null;
     }
     const line = result.data.lines[result.data.lines.length - 1];
-    return line;
+
+    const processedLine = this.processLine("passportNumber", line);
+    return processedLine ? {
+      text: processedLine,
+      confidence: line.confidence,
+    } : null;
+  }
+
+  /** Given a relative rectangle, find the rectangle position on the canvas */
+  private getCanvasRectFromRelativeRect(bbox: Bbox): Rectangle {
+    const width = (bbox.x1 - bbox.x0) * this.canvas.width;
+    const height = (bbox.y1 - bbox.y0) * this.canvas.height;
+    const left = bbox.x0 * this.canvas.width;
+    const top = bbox.y0 * this.canvas.height;
+    return { left, top, width, height };
+  }
+
+  /** Separates a date target rectangle into three sections for day month and year */
+  private getDateTargetRectangles(target: OCRTarget): Rectangle[] {
+    const fullRect = this.getCanvasRectFromRelativeRect(target.bbox);
+
+    const isPositionedAtLeftSide = target.bbox.x1 <= 0.5;
+    const sections: Rectangle[] = [undefined, undefined, undefined] as any;
+    if (isPositionedAtLeftSide) {
+      const relativeSections = [0.2, 0.3, 0.5];
+      let cumulative = 0;
+      for (let i = 0; i < relativeSections.length; i++) {
+        const percentage = relativeSections[i];
+        sections[i] = {
+          ...fullRect,
+          left: fullRect.left + fullRect.width * cumulative,
+          width: fullRect.width * percentage,
+        }
+        cumulative += percentage;
+      }
+    } else {
+      const relativeSections = [0.4, 0.3, 0.3];
+      let cumulative = 1;
+      for (let i = 0; i < relativeSections.length; i++) {
+        const percentage = relativeSections[i];
+        sections[i] = {
+          ...fullRect,
+          left: fullRect.left + fullRect.width - fullRect.width * cumulative,
+          width: fullRect.width * percentage,
+        }
+        cumulative -= percentage;
+      }
+    }
+    return sections;
+  }
+
+  private async readDateTarget(scheduler: Scheduler, key: keyof typeof PassportOCR.targets, target: OCRTarget, imgUrl: string): Promise<OCRTargetReadResult | null> {
+    const sections = this.getDateTargetRectangles(target);
+    const numberScheduler = await this.getNumberScheduler();
+    const [day, month, year] = (await Promise.all([
+      numberScheduler.addJob("recognize", imgUrl, {
+        rectangle: sections[0],
+      }),
+      scheduler.addJob("recognize", imgUrl, {
+        rectangle: sections[1]
+      }),
+      numberScheduler.addJob("recognize", imgUrl, {
+        rectangle: sections[2],
+      }),
+    ])).map(result => {
+      const line = result.data.lines[0];
+      return line ? {
+        text: line.text.trim(),
+        confidence: line.confidence,
+      } : null;
+    });
+
+    const processedLine = !!day && !!month && !!year ? this.processLine(key, `${day.text} ${month.text} ${year.text}`) : null;
+    return processedLine ? {
+      text: processedLine,
+      confidence: (day!.confidence + month!.confidence + year!.confidence) / 3
+    } : null;
   }
 
   /** Perform OCR on a target. ``imgUrl`` can be retrieved from ``this.canvas.toDataURL()`` */
-  private async readTarget(scheduler: Scheduler, target: OCRTarget, imgUrl: string): Promise<Line | null> {
-    const width = (target.bbox.x1 - target.bbox.x0) * this.canvas.width;
-    const height = (target.bbox.y1 - target.bbox.y0) * this.canvas.height;
-    const x = target.bbox.x0 * this.canvas.width;
-    const y = target.bbox.y0 * this.canvas.height;
+  private async readTarget(scheduler: Scheduler, key: keyof typeof PassportOCR.targets, target: OCRTarget, imgUrl: string): Promise<OCRTargetReadResult | null> {
+    const rectangle = this.getCanvasRectFromRelativeRect(target.bbox);
 
     // With rectangle, we don't need to make explicit copies of the image. The same image can be passed to the scheduler.
-    const result = await scheduler.addJob("recognize", imgUrl, {
-      rectangle: {
-        left: x,
-        top: y,
-        width,
-        height,
-      }
-    });
+    const [result, altResult] = await Promise.all([
+      scheduler.addJob("recognize", imgUrl, {
+        rectangle
+      }),
+      // Also perform a redundant check by splitting the date into three for potentially better recognition
+      target.isDate ? this.readDateTarget(scheduler, key, target, imgUrl) : null
+    ]);
     // Greedily grab the first line and hope for the best.
-    return result.data.lines[0] ?? null;
+    const line = result.data.lines[0];
+    const processedLine = line ? this.processLine(key, line) : null;
+
+    // Compare the confidence of the alternative result with this result.
+    if (altResult && altResult.confidence > line.confidence) {
+      return altResult;
+    }
+    return processedLine ? { text: processedLine, confidence: line.confidence } : null;
   }
 
   /** For debug purposes. Mark the target boxes on the canvas */
-  private async markBoxes(boxes: Bbox[]) {
+  private async markBoxes(boxes: Rectangle[]) {
     const ctx = this.canvasContext;
     ctx.strokeStyle = "green"
     for (const box of boxes) {
-      ctx.strokeRect(box.x0, box.y0, box.x1 - box.x0, box.y1 - box.y0);
+      ctx.strokeRect(box.left, box.top, box.width, box.height);
     }
   }
 
@@ -649,8 +769,8 @@ export default class PassportOCR {
    *  If it is a truthy value, the line will be compared with similar entries in its history to find the closest match.
    *  Otherwise, the original line is returned.
    */
-  private processLine(key: keyof typeof PassportOCR.targets, line: Line) {
-    let text: string | null = line.text.trim();
+  private processLine(key: keyof typeof PassportOCR.targets, line: Line | string) {
+    let text: string | null = typeof line === 'string' ? line : line.text.trim();
     const originalTarget = PassportOCR.targets[key];
     const history = this.options.history[key];
     if (typeof originalTarget.corrector === 'function') {
@@ -702,27 +822,22 @@ export default class PassportOCR {
     const getPassportNumberAlt = await this.locateViewArea();
     const scheduler = await this.getScheduler();
 
-    const result: Record<string, Line | null> = {};
+    const result: Record<string, OCRTargetReadResult | null> = {};
     const imgUrl = this.canvas.toDataURL();
-    const promises = Object.keys(PassportOCR.targets).map(async (k) => {
+
+    const promises: Promise<unknown>[] = Object.keys(PassportOCR.targets).map(async (k) => {
       const key = k as keyof typeof PassportOCR.targets;
       const value = PassportOCR.targets[key];
-      result[key] = await this.readTarget(scheduler, value, imgUrl);
+      result[key] = await this.readTarget(scheduler, key, value, imgUrl);
     });
-
-    promises.push(new Promise(async (resolve) => {
-      const passnum = await getPassportNumberAlt();
-      result.passportNumber2 = passnum ? {
-        ...passnum,
-        text: passnum.text.trim().substring(0, 8),
-      } : null;
-      resolve();
-    }));
+    promises.push(getPassportNumberAlt());
     await Promise.all(promises);
-    console.log(result.passportNumber, result.passportNumber2);
+
+    // Compare passport number and its alternative fetched from passport bottom
     if ((!result.passportNumber && result.passportNumber2) || (result.passportNumber && result.passportNumber2 && result.passportNumber.confidence <= result.passportNumber2.confidence)) {
       result.passportNumber = result.passportNumber2;
     }
+    // Same goes to sex. Sex can either be located to the top right, or at the center between date of birth and place of birth.
     if (
       (!result.sex && result.sex2) ||
       (result.sex && result.sex2 && result.sex.confidence < result.sex2.confidence)) {
@@ -731,21 +846,23 @@ export default class PassportOCR {
     delete result.sex2;
     delete result.passportNumber2;
 
-    this.markBoxes(Object.keys(PassportOCR.targets).map((key) => {
-      const { bbox } = PassportOCR.targets[key as keyof typeof PassportOCR.targets];
-      return ({
-        x0: bbox.x0 * this.canvas.width,
-        y0: bbox.y0 * this.canvas.height,
-        x1: bbox.x1 * this.canvas.width,
-        y1: bbox.y1 * this.canvas.height,
-      });
-    }));
+    // Mark bounding boxes
+    const boxes: Rectangle[] = [];
+    for (const key of Object.keys(PassportOCR.targets)) {
+      const target = PassportOCR.targets[key as keyof typeof PassportOCR.targets];
+      if (target.isDate) {
+        boxes.push(...this.getDateTargetRectangles(target));
+      }
+      boxes.push(this.getCanvasRectFromRelativeRect(target.bbox));
+    }
+    this.markBoxes(boxes);
     await this.debugImage();
 
+    // Extract only the text as returned data
     const payload: Record<string, string | null> = {};
     for (const key of Object.keys(result)) {
       const value = result[key];
-      payload[key] = value ? this.processLine(key as keyof typeof PassportOCR.targets, value) : null;
+      payload[key] = value ? value.text : null;
     }
 
     return payload as PassportOCRPayload;
@@ -754,5 +871,6 @@ export default class PassportOCR {
   /** Cleans up all existing workers. Make sure to call this function when the page is closed */
   async terminate() {
     await this._scheduler?.terminate();
+    await this._numberScheduler?.terminate();
   }
 }
