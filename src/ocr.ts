@@ -5,10 +5,10 @@ import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
 // If you're bundling pdf.js along with the rest of the code, the worker needs to be loaded so that the bundler is aware of it.
 import 'pdfjs-dist/build/pdf.worker.min.mjs';
 
-function copyImageData(data: ImageData, width: number, height: number): HTMLCanvasElement {
+function copyImageData(data: ImageData): HTMLCanvasElement {
   const tempCanvas = document.createElement("canvas");
-  tempCanvas.width = width;
-  tempCanvas.height = height;
+  tempCanvas.width = data.width;
+  tempCanvas.height = data.height;
   const tempCtx = tempCanvas.getContext('2d')!;
   tempCtx.putImageData(data, 0, 0);
   return tempCanvas;
@@ -55,6 +55,8 @@ interface PassportOCROptions {
   history: PassportOCRHistory;
   /** How many history entries should be stored at a time */
   historyLimit: number;
+  /** The recommended width of the passport view area. Larger sizes mean that the font would be clearer, but the OCR would take a longer time to finish processing. */
+  recommendedWidth: number;
 }
 
 /** Helper class to perform OCR for passports.
@@ -88,8 +90,9 @@ export default class PassportOCR {
         x0: 0.600,
         y0: 0.060,
         x1: 1,
-        y1: 0.200,
+        y1: 0.230,
       },
+      corrector: PassportOCR.correctPassportNumber,
     } as OCRTarget,
     fullName: {
       bbox: {
@@ -98,6 +101,7 @@ export default class PassportOCR {
         x1: 0.820,
         y1: 0.350,
       },
+      corrector: PassportOCR.correctAlphabet,
     } as OCRTarget,
     sex: {
       bbox: {
@@ -199,6 +203,7 @@ export default class PassportOCR {
       onProcessImage: options?.onProcessImage,
       history: options?.history ?? Object.create(null),
       historyLimit: options?.historyLimit ?? 10,
+      recommendedWidth: options?.recommendedWidth ?? 960,
     };
   }
 
@@ -219,6 +224,21 @@ export default class PassportOCR {
       return null;
     }
     return `${pad0(day)} ${month} ${year}`;
+  }
+
+  private static correctPassportNumber(value: string) {
+    return Array.from(value.toUpperCase()).filter(chr => {
+      const ascii = chr.charCodeAt(0);
+      const isNumeric = 48 <= ascii && ascii <= 48 + 9;
+      const isUppercaseAlpha = 65 <= ascii && ascii <= 65 + 26;
+      return isNumeric || isUppercaseAlpha;
+    }).join('').substring(0, 8);
+  }
+  private static correctAlphabet(value: string) {
+    return Array.from(value.toUpperCase()).filter(chr => {
+      const ascii = chr.charCodeAt(0);
+      return 65 <= ascii && ascii <= 65 + 26;
+    }).join('');
   }
 
   /** Corrects passport types.
@@ -279,7 +299,7 @@ export default class PassportOCR {
         load_number_dawg: '0',
       });
       await worker.setParameters({
-        tessedit_char_blacklist: `,."'`
+        tessedit_char_blacklist: `,."'“`
       });
       return worker;
     });
@@ -417,9 +437,8 @@ export default class PassportOCR {
   async mountPdfFile(file: File) {
     const pdf = await getDocument(await file.arrayBuffer()).promise;
     const firstPage = await pdf.getPage(1);
-    // Sometimes, the passport is really small in the pdf file. By increasing the scale of the pdf file, the text should hopefully be more legible.
     const viewport = firstPage.getViewport({
-      scale: 1.5,
+      scale: 1,
     });
     this.canvas.width = viewport.width;
     this.canvas.height = viewport.height;
@@ -456,7 +475,7 @@ export default class PassportOCR {
     ctx.putImageData(oldImageData, 0, 0);
 
     // Backup original image
-    const tempCanvas = copyImageData(ctx.getImageData(0, 0, this.canvas.width, this.canvas.height), this.canvas.width, this.canvas.height);
+    const tempCanvas = copyImageData(ctx.getImageData(0, 0, this.canvas.width, this.canvas.height));
     this.cropCanvas(viewRect, viewRect.angle);
     await this.debugImage();
     const p1 = await this.locateViewAreaBottom(scheduler, ctx);
@@ -635,6 +654,10 @@ export default class PassportOCR {
     })!;
     this.rotateCanvas(pivot, canvas);
     this.cropCanvas(box, 0, canvas);
+    this.scaleCanvasToRecommendedSize({
+      canvas,
+      recommendedWidth: 300,
+    });
     await this.debugImage(canvas.toDataURL());
 
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -677,7 +700,7 @@ export default class PassportOCR {
     const isPositionedAtLeftSide = target.bbox.x1 <= 0.5;
     const sections: Rectangle[] = [undefined, undefined, undefined] as any;
     if (isPositionedAtLeftSide) {
-      const relativeSections = [0.2, 0.3, 0.5];
+      const relativeSections = [0.23, 0.32, 0.45];
       let cumulative = 0;
       for (let i = 0; i < relativeSections.length; i++) {
         const percentage = relativeSections[i];
@@ -817,10 +840,39 @@ export default class PassportOCR {
     return this.options.history;
   }
 
+  /** Tesseract seems to perform better when the text is bigger. This would increase the amount of time for OCR,
+   *  but at the very least, small images can now be recognized properly. */
+  private scaleCanvasToRecommendedSize(options: {
+    canvas?: HTMLCanvasElement;
+    recommendedWidth?: number;
+    // If the width exceeds recommendedWidth, should the image be downscaled or not
+    shouldDownscale?: boolean;
+  }) {
+    let { canvas, recommendedWidth, shouldDownscale = true } = options;
+    canvas = canvas ?? this.canvas;
+    recommendedWidth = recommendedWidth ?? this.options.recommendedWidth
+    if (canvas.width > recommendedWidth && !shouldDownscale) {
+      return;
+    }
+
+    const scaleFactor = recommendedWidth / canvas.width;
+    const ctx = canvas.getContext('2d', {
+      willReadFrequently: true,
+    })!;
+    const imageCopy = copyImageData(ctx.getImageData(0, 0, canvas.width, canvas.height));
+    canvas.width = recommendedWidth;
+    canvas.height = canvas.height * scaleFactor;
+    ctx.drawImage(imageCopy, 0, 0, canvas.width, canvas.height);
+  }
+
   /** Performs OCR */
   async run(): Promise<PassportOCRPayload> {
+    this.scaleCanvasToRecommendedSize({
+      recommendedWidth: 1400,
+    });
     const getPassportNumberAlt = await this.locateViewArea();
     const scheduler = await this.getScheduler();
+    this.scaleCanvasToRecommendedSize({});
 
     const result: Record<string, OCRTargetReadResult | null> = {};
     const imgUrl = this.canvas.toDataURL();
@@ -830,7 +882,10 @@ export default class PassportOCR {
       const value = PassportOCR.targets[key];
       result[key] = await this.readTarget(scheduler, key, value, imgUrl);
     });
-    promises.push(getPassportNumberAlt());
+    promises.push(new Promise<void>(async (resolve) => {
+      result.passportNumber2 = await getPassportNumberAlt();
+      resolve();
+    }));
     await Promise.all(promises);
 
     // Compare passport number and its alternative fetched from passport bottom
