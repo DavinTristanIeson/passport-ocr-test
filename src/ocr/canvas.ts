@@ -180,7 +180,7 @@ export default class OCRCanvas {
    *  ```
    *  sections[0] will include A1, B1, A2, B2, while sections[1] will include B1, C1, B2, C2, and sections[2] includes A2, B2, A3, B3.
    */
-  distributeSections(side: number): Rectangle[] {
+  distributeOverlappingCells(side: number): Rectangle[] {
     const offset = 1 / (side + 1)
     return Array.from({ length: side * side }, (_, i) => {
       const row = Math.floor(i / side);
@@ -194,5 +194,17 @@ export default class OCRCanvas {
         y1: y0 + offset * 2,
       } as Bbox;
     }).map(x => this.getCanvasRectFromRelativeRect(x));
+  }
+  /** Returns rectangles that splits the canvas into ``count`` rows. */
+  distributeRows(count: number): Rectangle[] {
+    const rowHeight = this.canvas.height / count;
+    return Array.from({ length: count }, (_, i) => {
+      return ({
+        left: 0,
+        width: this.canvas.width,
+        top: rowHeight * i,
+        height: rowHeight,
+      });
+    })
   }
 }

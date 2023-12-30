@@ -1,6 +1,7 @@
 import type { Scheduler, Bbox, Line } from "tesseract.js";
 import OCRCanvas from "./canvas";
 import { closest, distance } from "fastest-levenshtein";
+import { correctByHistory } from "./utils";
 
 export type OCRTarget = {
   key: string;
@@ -36,7 +37,6 @@ export default abstract class OCR<TTarget extends Record<string, any>> {
       historyLimit: options?.historyLimit ?? 10,
       onProcessImage: options?.onProcessImage,
     }
-    this.getScheduler();
   }
 
   /** Mount the file on the canvas. This must be performed before ``run`` */
@@ -61,12 +61,7 @@ export default abstract class OCR<TTarget extends Record<string, any>> {
     if (typeof target.corrector === 'function') {
       text = target.corrector(text, history);
     } else if (!!target.corrector) {
-      if (history && history.length > 0) {
-        const candidate = closest(text, history);
-        if (distance(text, candidate) < Math.ceil(text.length * 2 / 3)) {
-          text = candidate;
-        }
-      }
+      text = correctByHistory(text, history);
     }
     return text;
   }

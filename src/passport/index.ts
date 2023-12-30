@@ -5,6 +5,7 @@ import OCR, { OCROptions, OCRResult, OCRTarget, OCRTargetReadResult } from "../o
 import PassportOCRTargets, { PassportOCRTarget } from "./targets";
 import { copyImageData, runWorker } from "../ocr/utils";
 import OCRCanvas from "../ocr/canvas";
+import TaskPool, { TaskResultStatus } from "../ocr/task-pool";
 
 function median(arr: number[]) {
   if (arr.length % 2 === 0) {
@@ -37,7 +38,6 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets> {
   options: PassportOCROptions;
   constructor(options?: Partial<PassportOCROptions>) {
     super(options);
-    this.getNumberScheduler();
     this.options = {
       history: options?.history ?? {},
       historyLimit: options?.historyLimit ?? 10,
@@ -53,7 +53,7 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets> {
       return this._scheduler;
     }
     const WORKER_COUNT = 4;
-    const scheduler = await createScheduler();
+    this._scheduler = await createScheduler();
     const promisedWorkers = Array.from({ length: WORKER_COUNT }, async (_, i) => {
       const worker = await createWorker("ind", undefined, undefined, {
         // https://github.com/tesseract-ocr/tessdoc/blob/main/ImproveQuality.md
@@ -69,10 +69,9 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets> {
     });
     const workers = await Promise.all(promisedWorkers);
     for (const worker of workers) {
-      scheduler.addWorker(worker);
+      this._scheduler.addWorker(worker);
     }
-    this._scheduler = scheduler;
-    return scheduler;
+    return this._scheduler;
   }
 
   private async getNumberScheduler(): Promise<Scheduler> {
@@ -80,7 +79,7 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets> {
       return this._numberScheduler;
     }
     const WORKER_COUNT = 2;
-    const scheduler = await createScheduler();
+    this._numberScheduler = await createScheduler();
     const promisedWorkers = Array.from({ length: WORKER_COUNT }, async () => {
       const worker = await createWorker("ind", undefined, undefined, {
         load_system_dawg: '0',
@@ -95,10 +94,9 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets> {
     });
     const workers = await Promise.all(promisedWorkers);
     for (const worker of workers) {
-      scheduler.addWorker(worker);
+      this._numberScheduler.addWorker(worker);
     }
-    this._numberScheduler = scheduler;
-    return scheduler;
+    return this._numberScheduler;
   }
 
   /** Helper method for finding words in a line. The words don't have to exactly match, as long as they are close enough. */
@@ -183,21 +181,62 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets> {
     const imageUrl = this.canvas.toDataURL();
     await this.debugImage(imageUrl);
 
-    const result = await scheduler.addJob("recognize", imageUrl);
 
-    // Find any of these words (note that republik and indonesia must both appear in the same line)
-    let republikWord: Word | undefined, indonesiaWord: Word | undefined, pasporWord: Word | undefined;
-    for (const line of result.data.lines) {
-      const { republik, indonesia, paspor } = PassportOCR.findWordsInLine(line, ["republik", "indonesia", "paspor"]);
-      if (republik && indonesia) {
-        republikWord = republik;
-        indonesiaWord = indonesia;
-        break;
-      }
-      if (paspor && !pasporWord) {
-        pasporWord = paspor;
-      }
+    const sections = this.canvas.distributeOverlappingCells(3);
+    await this.canvas.markBoxes(sections);
+    await this.debugImage();
+    type ViewAreaTopLocateResult = {
+      republikWord: Word | undefined;
+      indonesiaWord: Word | undefined;
+      pasporWord: Word | undefined;
     }
+    const pool = new TaskPool<ViewAreaTopLocateResult>(async (i) => {
+      const rectangle = sections[i];
+      const result = await scheduler.addJob("recognize", imageUrl, { rectangle });
+      // Find any of these words (note that republik and indonesia must both appear in the same line)
+      let republikWord: Word | undefined, indonesiaWord: Word | undefined, pasporWord: Word | undefined;
+      for (const line of result.data.lines) {
+        const { republik, indonesia, paspor } = PassportOCR.findWordsInLine(line, ["republik", "indonesia", "paspor"]);
+        if (republik && indonesia) {
+          republikWord = republik;
+          indonesiaWord = indonesia;
+          return {
+            type: TaskResultStatus.ShortCircuit,
+            value: {
+              republikWord,
+              indonesiaWord,
+              pasporWord,
+            }
+          }
+        }
+        if (paspor && !pasporWord) {
+          pasporWord = paspor;
+        }
+      }
+      if (pasporWord) {
+        return {
+          type: TaskResultStatus.Complete,
+          value: {
+            republikWord,
+            indonesiaWord,
+            pasporWord,
+          }
+        }
+      } else {
+        return {
+          type: TaskResultStatus.Ignore,
+        }
+      }
+    }, {
+      count: sections.length,
+      limit: scheduler.getNumWorkers(),
+    });
+
+    const result = await pool.latest();
+    if (!result) {
+      throw new Error("Cannot find top-left end of passport");
+    }
+    const { republikWord, indonesiaWord, pasporWord } = result;
 
     // SCENARIO #1: REPUBLIK INDONESIA is found. x0 is always aligned with relevant section.
     if (republikWord && indonesiaWord) {
@@ -234,7 +273,6 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets> {
         angle: 0
       }
     }
-
     throw new Error("Cannot find top-left end of passport");
   }
 

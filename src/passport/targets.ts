@@ -1,5 +1,6 @@
 import { closest, distance } from "fastest-levenshtein";
 import { OCRHistory, OCRResult, type OCRTarget } from "../ocr";
+import { correctByHistory } from "../ocr/utils";
 
 export type PassportOCRTarget = OCRTarget & {
   isDate?: boolean;
@@ -41,12 +42,25 @@ function correctPassportNumber(value: string) {
     return isNumeric || isUppercaseAlpha;
   }).join('').substring(0, 8);
 }
-function correctAlphabet(value: string) {
-  return Array.from(value.toUpperCase()).filter(chr => {
-    const ascii = chr.charCodeAt(0);
-    const isUppercaseAlpha = 65 <= ascii && ascii <= 65 + 26;
-    return isUppercaseAlpha || chr === ' ';
-  }).join('');
+function correctAlphabet(options?: {
+  withHistory?: boolean;
+  withSpaces?: boolean;
+  maxLength?: number;
+}) {
+  const withHistory = options?.withHistory ?? true;
+  const withSpaces = options?.withSpaces ?? false;
+  return (value: string, history?: string[]) => {
+    let text = Array.from(value.toUpperCase()).filter(chr => {
+      const ascii = chr.charCodeAt(0);
+      const isUppercaseAlpha = 65 <= ascii && ascii <= 65 + 26;
+      const isSpace = chr === ' ';
+      return isUppercaseAlpha || (withSpaces && isSpace);
+    }).join('').trim();
+    if (options?.maxLength !== undefined) {
+      text = text.substring(0, options.maxLength);
+    }
+    return withHistory ? correctByHistory(text, history) : text;
+  }
 }
 
 /** Corrects passport types.
@@ -85,16 +99,17 @@ function correctSex(value: string, history: string[] | undefined) {
 
 /** Bounding boxes for targetting relevant sections in the passport. */
 const PassportOCRTargets = {
-  type: {
-    key: "type",
-    bbox: {
-      x0: 0.000,
-      y0: 0.060,
-      x1: 0.230,
-      y1: 0.200,
-    },
-    corrector: correctPassportType,
-  } as PassportOCRTarget,
+  /* 30 Dec 2023: Type and RegNumber is not necessary at the moment. This can be uncommented at any time if you want to toggle them back on */
+  // type: {
+  //   key: "type",
+  //   bbox: {
+  //     x0: 0.000,
+  //     y0: 0.060,
+  //     x1: 0.230,
+  //     y1: 0.200,
+  //   },
+  //   corrector: correctPassportType,
+  // } as PassportOCRTarget,
   countryCode: {
     key: "countryCode",
     bbox: {
@@ -103,7 +118,11 @@ const PassportOCRTargets = {
       x1: 0.560,
       y1: 0.200
     },
-    corrector: true,
+    corrector: correctAlphabet({
+      withSpaces: false,
+      withHistory: true,
+      maxLength: 3,
+    }),
   } as PassportOCRTarget,
   passportNumber: {
     key: "passportNumber",
@@ -123,7 +142,10 @@ const PassportOCRTargets = {
       x1: 0.820,
       y1: 0.360,
     },
-    corrector: correctAlphabet,
+    corrector: correctAlphabet({
+      withHistory: false,
+      withSpaces: true,
+    }),
   } as PassportOCRTarget,
   sex: {
     key: "sex",
@@ -143,7 +165,10 @@ const PassportOCRTargets = {
       x1: 0.780,
       y1: 0.520,
     },
-    corrector: true,
+    corrector: correctAlphabet({
+      withHistory: true,
+      withSpaces: true,
+    }),
   } as PassportOCRTarget,
   dateOfBirth: {
     key: "dateOfBirth",
@@ -174,7 +199,10 @@ const PassportOCRTargets = {
       x1: 1,
       y1: 0.680
     },
-    corrector: true,
+    corrector: correctAlphabet({
+      withHistory: true,
+      withSpaces: true,
+    }),
   } as PassportOCRTarget,
   dateOfIssue: {
     key: "dateOfIssue",
@@ -198,15 +226,15 @@ const PassportOCRTargets = {
     isDate: true,
     corrector: correctPassportDate,
   } as PassportOCRTarget,
-  regNumber: {
-    key: "regNumber",
-    bbox: {
-      x0: 0.000,
-      y0: 0.860,
-      x1: 0.500,
-      y1: 1,
-    },
-  } as PassportOCRTarget,
+  // regNumber: {
+  //   key: "regNumber",
+  //   bbox: {
+  //     x0: 0.000,
+  //     y0: 0.860,
+  //     x1: 0.500,
+  //     y1: 1,
+  //   },
+  // } as PassportOCRTarget,
   issuingOffice: {
     key: "issuingOffice",
     bbox: {
@@ -215,7 +243,10 @@ const PassportOCRTargets = {
       x1: 1,
       y1: 1,
     },
-    corrector: true,
+    corrector: correctAlphabet({
+      withHistory: true,
+      withSpaces: true,
+    }),
   } as PassportOCRTarget
 };
 

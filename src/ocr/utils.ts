@@ -1,3 +1,5 @@
+import { closest, distance } from "fastest-levenshtein";
+
 export function runWorker<TInput, TOutput>(worker: Worker, input: TInput, transfer?: Transferable[]): Promise<TOutput> {
   return new Promise<TOutput>((resolve, reject) => {
     worker.onmessage = (e) => resolve(e.data as TOutput);
@@ -13,4 +15,14 @@ export function copyImageData(data: ImageData): HTMLCanvasElement {
   const tempCtx = tempCanvas.getContext('2d')!;
   tempCtx.putImageData(data, 0, 0);
   return tempCanvas;
+}
+
+export function correctByHistory(text: string, history: string[] | undefined) {
+  if (history && history.length > 0) {
+    const candidate = closest(text, history);
+    if (distance(text, candidate) < Math.ceil(text.length * 2 / 3)) {
+      text = candidate;
+    }
+  }
+  return text;
 }
