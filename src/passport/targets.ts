@@ -1,6 +1,6 @@
 import { closest, distance } from "fastest-levenshtein";
 import { OCRHistory, OCRResult, type OCRTarget } from "../ocr";
-import { correctByHistory } from "../ocr/utils";
+import { correctAlphabet, correctByHistory, pad0 } from "../ocr/utils";
 import { Bbox } from "tesseract.js";
 
 export type PassportOCRTarget = OCRTarget & {
@@ -11,11 +11,6 @@ export type PassportOCRResult = OCRResult<typeof PassportOCRTargets>;
 export type PassportOCRHistory = OCRHistory<typeof PassportOCRTargets>;
 
 const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-
-
-function pad0(num: number): string {
-  return (num < 10 ? `0${num}` : num.toString());
-}
 
 /** Corrects passport dates. Day and year must be numbers, but there's a loose word comparison for the month part. */
 function correctPassportDate(value: string): string | null {
@@ -43,26 +38,6 @@ function correctPassportNumber(value: string) {
     const isUppercaseAlpha = 65 <= ascii && ascii <= 65 + 26;
     return isNumeric || isUppercaseAlpha;
   }).join('').substring(0, 8);
-}
-function correctAlphabet(options?: {
-  withHistory?: boolean;
-  withSpaces?: boolean;
-  maxLength?: number;
-}) {
-  const withHistory = options?.withHistory ?? true;
-  const withSpaces = options?.withSpaces ?? false;
-  return (value: string, history?: string[]) => {
-    let text = Array.from(value.toUpperCase()).filter(chr => {
-      const ascii = chr.charCodeAt(0);
-      const isUppercaseAlpha = 65 <= ascii && ascii <= 65 + 26;
-      const isSpace = chr === ' ';
-      return isUppercaseAlpha || (withSpaces && isSpace);
-    }).join('').trim();
-    if (options?.maxLength !== undefined) {
-      text = text.substring(0, options.maxLength);
-    }
-    return withHistory ? correctByHistory(text, history) : text;
-  }
 }
 
 /** Corrects passport types.

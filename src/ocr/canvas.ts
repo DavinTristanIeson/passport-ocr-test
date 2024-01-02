@@ -67,9 +67,7 @@ export default class OCRCanvas {
   }
 
   /** Mutates the canvas with the cropped image. */
-  crop(box: Bbox, angle: number = 0) {
-    const width = box.x1 - box.x0;
-    const height = box.y1 - box.y0;
+  crop(box: Rectangle, angle: number = 0) {
     const canvas = this.canvas;
     const ctx = this.context;
     const tempCanvas = document.createElement("canvas");
@@ -78,16 +76,16 @@ export default class OCRCanvas {
     const tempCtx = tempCanvas.getContext('2d', {
       willReadFrequently: true,
     })!;
-    tempCtx.translate(-box.x0, -box.y0);
+    tempCtx.translate(-box.left, -box.top);
     tempCtx.rotate(-angle);
     tempCtx.drawImage(canvas, 0, 0);
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(tempCanvas, 0, 0);
-    const cropped = ctx.getImageData(0, 0, width, height);
+    const cropped = ctx.getImageData(0, 0, box.width, box.height);
     ctx.resetTransform();
-    canvas.width = width;
-    canvas.height = height;
+    canvas.width = box.width;
+    canvas.height = box.height;
     ctx.putImageData(cropped, 0, 0);
     return this;
   }

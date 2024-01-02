@@ -102,10 +102,10 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets, Schedule
     const oldImageData = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
     const p0 = await this.locateViewAreaTop(scheduler, ctx);
     const viewRect = {
-      x0: p0.x,
-      y0: p0.y,
-      x1: p0.x + p0.width,
-      y1: p0.y + p0.height,
+      left: p0.left,
+      top: p0.top,
+      width: p0.width,
+      height: p0.height,
       angle: p0.angle,
     }
 
@@ -118,8 +118,8 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets, Schedule
     const p1 = await this.locateViewAreaBottom(scheduler, ctx);
     const oldImageData2 = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
 
-    this.canvas.width = p1.x;
-    this.canvas.height = p1.y;
+    this.canvas.width = p1.left;
+    this.canvas.height = p1.top;
     ctx.putImageData(oldImageData2, 0, 0);
     await this.debugImage();
 
@@ -129,15 +129,17 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets, Schedule
     // Because of those two reasons, we have to capture p0 and p1 in a closure. This closure will then be called when running the OCR.
     return () => {
       const endHeight = p1.endY1 - p1.endY0;
+      const left = Math.max(0, p0.left - (p0.wordWidth * 0.9));
+      // add some padding
+      const top = p1.endY0 + p0.top - endHeight * 0.5;
       return this.getPassportNumberAlternative(scheduler, new OCRCanvas(tempCanvas), {
-        x0: Math.max(0, p0.x - (p0.wordWidth * 0.9)),
-        x1: p0.x,
-        // add some padding
-        y0: p1.endY0 + p0.y - endHeight * 0.5,
-        y1: p1.endY1 + p0.y + endHeight * 0.5,
+        left,
+        width: p0.left - left,
+        top,
+        height: (p1.endY1 + p0.top + endHeight * 0.5) - top,
       }, {
-        x: p0.x,
-        y: p1.y,
+        x: p0.left,
+        y: p1.top,
         angle: p0.angle,
       });
     };
@@ -226,9 +228,9 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets, Schedule
         (indonesiaWord.bbox.x1 - republikWord.bbox.x0) / this.canvas.width);
 
       return {
-        x: republikWord.bbox.x0 - republikWidth * 0.1,
+        left: republikWord.bbox.x0 - republikWidth * 0.1,
         // Don't use y1 since it can extend to the "Republic of Indonesia" subtitle. Height is also influenced by this
-        y: republikWord.bbox.y0 + (republikWidth * 0.3),
+        top: republikWord.bbox.y0 + (republikWidth * 0.3),
         // Predicted width and height. This doesn't have to be accurate, but just enough so that locateViewAreaBottom can find the last two lines in the passport.
         width: width * 2.2,
         height: width * 2.2,
@@ -241,8 +243,8 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets, Schedule
       const width = (pasporWord.bbox.x1 - pasporWord.bbox.x0);
       const height = (pasporWord.bbox.y1 - pasporWord.bbox.y0);
       return {
-        x: pasporWord.bbox.x1 + (width * 0.75),
-        y: pasporWord.bbox.y1 - (height * 0.5),
+        left: pasporWord.bbox.x1 + (width * 0.75),
+        top: pasporWord.bbox.y1 - (height * 0.5),
         width: width * 3 * 2,
         height: width * 3 * 2,
         wordWidth: width * 3,
@@ -310,8 +312,8 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets, Schedule
     const rightEdgesMedian = median(rightEdges);
 
     return {
-      x: rightEdgesMedian,
-      y: relevantLines[relevantLines.length - 1].bbox.y1,
+      left: rightEdgesMedian,
+      top: relevantLines[relevantLines.length - 1].bbox.y1,
       endY0: endOfPassportLine.bbox.y0,
       endY1: endOfPassportLine.bbox.y1,
     }
@@ -322,7 +324,7 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets, Schedule
    *  Fortunately, passport number can also be fetched from the bottommost line on the passport.
    *  Unfortunately, our cropping mechanism will cut that part out of the view section, which is why both box and pivot needs to be provided for rotation and cropping.
    */
-  private async getPassportNumberAlternative(scheduler: Scheduler, canvas: OCRCanvas, box: Bbox, pivot: {
+  private async getPassportNumberAlternative(scheduler: Scheduler, canvas: OCRCanvas, box: Rectangle, pivot: {
     x: number,
     y: number,
     angle: number,

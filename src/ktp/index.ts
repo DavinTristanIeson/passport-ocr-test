@@ -1,7 +1,7 @@
-import { Bbox, Rectangle, Scheduler, Word, createScheduler, createWorker, detect } from "tesseract.js";
-import OCR, { OCRHistory, OCROptions, OCRResult } from "../ocr";
-import KTPCardOCRTargets from "./targets";
-import { copyImageData, runWorker } from "../ocr/utils";
+import { Bbox, Line, Rectangle, Scheduler, Word, createScheduler, createWorker, detect } from "tesseract.js";
+import OCR, { OCRHistory, OCROptions, OCRResult, OCRTarget } from "../ocr";
+import KTPCardOCRTargets, { KTPCardOCRTarget } from "./targets";
+import { copyImageData, correctByHistory, runWorker } from "../ocr/utils";
 import { KTPCardOCRPreprocessMessageInput, KTPCardOCRPreprocessMessageOutput } from "./preprocess.worker";
 import { distance } from "fastest-levenshtein";
 import OCRCanvas from "../ocr/canvas";
@@ -64,20 +64,20 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
     await this.debugImage();
     const bottomY = await this.locateViewAreaBottom();
     this.canvas.crop({
-      x0: 0,
-      x1: this.canvas.width,
-      y0: 0,
-      y1: bottomY,
+      left: 0,
+      width: this.canvas.width,
+      top: 0,
+      height: bottomY,
     });
     await this.debugImage();
 
 
     return () => {
       canvasCopy.crop({
-        x0: rect.x0 - rect.wordWidth * 0.4,
-        y0: rect.y0 - rect.wordHeight * 2,
-        x1: rect.x1,
-        y1: rect.y0,
+        left: rect.left - rect.wordWidth * 0.4,
+        top: rect.top - rect.wordHeight * 2,
+        width: rect.width,
+        height: rect.wordHeight * 2,
       }, rect.angle);
       return this.detectNIK(canvasCopy);
     }
@@ -92,7 +92,25 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
     if (!line) {
       return null;
     }
-    return this.processLine({} as any, line);
+    return this.processLine(this.targets.NIK, line);
+  }
+
+  private async detectBloodType() {
+    const scheduler = await this.multiplexor.getScheduler(SchedulerKeys.default);
+    const rectangle = this.canvas.getCanvasRectFromRelativeRect({
+      x0: 0.9,
+      x1: 1,
+      y0: 0.2,
+      y1: 0.32,
+    });
+    const result = await scheduler.addJob("recognize", this.canvas.toDataURL(), { rectangle });
+    await this.canvas.markBoxes([rectangle]);
+    await this.debugImage();
+    const line = result.data.lines[0];
+    if (!line) {
+      return null;
+    }
+    return this.processLine(this.targets.NIK, line);
   }
 
   private async locateViewAreaBottom(): Promise<number> {
@@ -141,10 +159,10 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
       ((surroundingWord.bbox.y0 - provinsiWord.bbox.y0) + (surroundingWord.bbox.y1 - provinsiWord.bbox.y1)) / 2 / this.canvas.height,
       (surroundingWord.bbox.x1 - provinsiWord.bbox.x0) / this.canvas.width);
     return {
-      x0,
-      y0,
-      x1: x0 + provinsiWidth * 2.5,
-      y1: y0 + provinsiWidth * 2.7,
+      left: x0,
+      top: y0,
+      width: provinsiWidth * 2.5,
+      height: provinsiWidth * 2.7,
       angle,
       wordHeight: provinsiWord.bbox.y1 - provinsiWord.bbox.y0,
       wordWidth: provinsiWidth,
@@ -155,10 +173,38 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
     const detectNIK = await this.locateViewArea();
     const scheduler = await this.multiplexor.getScheduler(SchedulerKeys.default);
 
-    const result = await scheduler.addJob("recognize", this.canvas.toDataURL());
-    const payload = result.data.lines.map(line => this.processLine({} as any, line))
-    const nik = await detectNIK();
-    console.log(payload, nik);
-    return payload as any;
+    const payload: KTPCardOCRResult = {} as any;
+    const [result, nik, bloodType] = await Promise.all([
+      scheduler.addJob("recognize", this.canvas.toDataURL()),
+      detectNIK(),
+      this.detectBloodType(),
+    ]);
+    payload.NIK = nik;
+    payload.bloodType = bloodType;
+
+    const placeOfBirth = result.data.lines[1].text.trim().split(' ');
+    const dateOfBirth = placeOfBirth.pop();
+    payload.placeOfBirth = this.processLine(this.targets.placeOfBirth, placeOfBirth.join(' '));
+    payload.dateOfBirth = dateOfBirth ? this.processLine(this.targets.dateOfBirth, dateOfBirth) : null;
+
+
+    const indicesToTargetMap: Record<number, KTPCardOCRTarget> = {};
+    for (const key of Object.keys(this.targets)) {
+      const target = this.targets[key as keyof typeof this.targets];
+      if (target.index != null) {
+        indicesToTargetMap[target.index] = target;
+      }
+    }
+
+    for (let i = 0; i < result.data.lines.length; i++) {
+      const line = result.data.lines[i];
+      const target = indicesToTargetMap[i];
+      if (!target) continue;
+      console.log(target.key);
+      payload[target.key as keyof KTPCardOCRResult] = this.processLine(target, line);
+    }
+
+    console.log(result.data.lines.map(x => x.text));
+    return payload;
   }
 }
