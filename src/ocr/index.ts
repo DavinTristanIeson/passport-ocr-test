@@ -1,11 +1,10 @@
-import type { Scheduler, Bbox, Line } from "tesseract.js";
+import type { Line } from "tesseract.js";
 import OCRCanvas from "./canvas";
-import { closest, distance } from "fastest-levenshtein";
 import { correctByHistory } from "./utils";
+import SchedulerMultiplexor, { SchedulerMultiplexorConfig } from "./scheduler-multiplexor";
 
 export type OCRTarget = {
   key: string;
-  bbox: Bbox;
   corrector?: ((value: string, history: string[] | undefined) => string | null) | boolean;
 }
 export type OCRTargetReadResult = { text: string, confidence: number };
@@ -17,7 +16,7 @@ export type OCRHistory<TTarget extends Record<string, any>> = {
   [key in keyof TTarget]?: string[];
 }
 
-export interface OCROptions<TTarget extends object> {
+export interface OCROptions<TTarget extends Record<string, OCRTarget>> {
   /** Callback for debugging */
   onProcessImage?: (objectUrl: string) => void | Promise<void>;
   /** An object containing previous manually corrected values */
@@ -26,29 +25,36 @@ export interface OCROptions<TTarget extends object> {
   historyLimit: number;
 }
 
-export default abstract class OCR<TTarget extends Record<string, any>> {
+type OCRConstructorOptions<TTarget extends Record<string, OCRTarget>, TVariants extends string> = Partial<OCROptions<TTarget>> & {
+  multiplexorConfig: SchedulerMultiplexorConfig<TVariants>;
+};
+
+export default abstract class OCR<TTarget extends Record<string, OCRTarget>, TVariants extends string = string> {
   abstract targets: TTarget;
   options: OCROptions<TTarget>;
   canvas: OCRCanvas;
-  constructor(options?: Partial<OCROptions<TTarget>>) {
+  protected multiplexor: SchedulerMultiplexor<TVariants>;
+  constructor(options: OCRConstructorOptions<TTarget, TVariants>) {
     this.canvas = new OCRCanvas();
     this.options = {
       history: options?.history ?? {},
       historyLimit: options?.historyLimit ?? 10,
       onProcessImage: options?.onProcessImage,
     }
+    this.multiplexor = new SchedulerMultiplexor(options.multiplexorConfig);
   }
 
   /** Mount the file on the canvas. This must be performed before ``run`` */
   mountFile(file: File): Promise<void> {
     return this.canvas.mountFile(file);
   }
-  abstract run(): Promise<OCRResult<TTarget>>;
-  /** Cleans up all existing workers. Make sure to call this function when the page is closed */
-  abstract terminate(): Promise<void>;
 
-  // Get the Scheduler used for the OCR
-  protected abstract getScheduler(): Promise<Scheduler>;
+  abstract run(): Promise<OCRResult<TTarget>>;
+
+  /** Cleans up all existing workers. Make sure to call this function when the page is closed */
+  async terminate(): Promise<void> {
+    return this.multiplexor.terminate();
+  }
 
   /** Processes a line outputted by the OCR.
    *  If the original target has a corrector function, the corrector function will be invoked.

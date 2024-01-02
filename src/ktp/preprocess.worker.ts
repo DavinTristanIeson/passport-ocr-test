@@ -1,9 +1,9 @@
-export interface PassportOCRPreprocessMessageInput {
+export interface KTPCardOCRPreprocessMessageInput {
   width: number;
   height: number;
   data: Uint8ClampedArray;
 }
-export type PassportOCRPreprocessMessageOutput = Uint8ClampedArray;
+export type KTPCardOCRPreprocessMessageOutput = Uint8ClampedArray;
 
 function brightnessOf(data: Uint8ClampedArray): number {
   const RED_INTENCITY_COEF = 0.2126;
@@ -78,9 +78,9 @@ function binarize(data: Uint8ClampedArray): Uint8ClampedArray {
 
 
 self.addEventListener("message", (ev) => {
-  const { width, height, data } = ev.data as PassportOCRPreprocessMessageInput;
+  const { width, height, data } = ev.data as KTPCardOCRPreprocessMessageInput;
   const procImage = binarize(grayscale(data));
-  self.postMessage(procImage satisfies PassportOCRPreprocessMessageOutput, {
+  self.postMessage(procImage satisfies KTPCardOCRPreprocessMessageOutput, {
     transfer: [procImage.buffer]
   });
 });

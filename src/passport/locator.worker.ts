@@ -1,4 +1,4 @@
-import type { OCRPreprocessMessageInput, OCRPreprocessMessageOutput } from "./preprocess.worker";
+import type { PassportOCRPreprocessMessageInput, PassportOCRPreprocessMessageOutput } from "./preprocess.worker";
 
 function calculateRedDiffThreshold(data: Uint8ClampedArray) {
   const buffer = new Uint8ClampedArray({ length: Math.floor(data.length / 4) });
@@ -48,10 +48,10 @@ function emphasizeBlueGreen(data: Uint8ClampedArray) {
 
 
 self.addEventListener("message", (ev) => {
-  const { data } = ev.data as OCRPreprocessMessageInput;
+  const { data } = ev.data as PassportOCRPreprocessMessageInput;
   const procImage = emphasizeBlueGreen(data);
 
-  self.postMessage(procImage satisfies OCRPreprocessMessageOutput, {
+  self.postMessage(procImage satisfies PassportOCRPreprocessMessageOutput, {
     transfer: [procImage.buffer]
   });
 });

@@ -1,6 +1,7 @@
 import { getDocument } from 'pdfjs-dist';
 import PassportOCR from './passport';
 import type { PassportOCRHistory } from './passport/targets';
+import KTPCardOCR, { KTPCardOCRHistory } from './ktp';
 
 const ocrFileInput = document.querySelector<HTMLInputElement>("#ocr_file")!;
 const ocrExecuteButton = document.querySelector<HTMLButtonElement>("#ocr_exec")!;
@@ -13,9 +14,9 @@ const ocrHistoryTable = document.querySelector<HTMLTableElement>("#ocr_history")
 const temporaryCanvas = document.createElement("canvas");
 
 
-const history: PassportOCRHistory = {};
+const history: KTPCardOCRHistory = {};
 
-const OCR = new PassportOCR({
+const OCR = new KTPCardOCR({
   onProcessImage: (objectUrl) => {
     const processedImage = document.createElement("img");
     processedImage.src = objectUrl;
