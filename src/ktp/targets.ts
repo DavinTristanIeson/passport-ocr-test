@@ -1,6 +1,7 @@
 import { distance } from "fastest-levenshtein";
 import { OCRTarget } from "../ocr";
-import { anyCorrectors, correctAlphabet, correctByHistory, correctEnums, mergeCorrectors } from "../ocr/utils";
+import { anyCorrectors, correctAlphabet, correctByHistory, correctEnums, mergeCorrectors } from "../ocr/correctors";
+import { correctStartsWith } from "../ocr/correctors";
 
 export type KTPCardOCRTarget = OCRTarget & {
   index: number | null;
@@ -13,8 +14,10 @@ function correctBloodType(bloodType: string) {
   const cleanBlood = Array.from(bloodType).filter(chr => "ABO-+".includes(chr)).join('');
   return bloodTypes.find(bt => bt === cleanBlood) ?? null;
 }
+
+export const KTP_DATE_REGEX = /([0-9]{2})[^a-zA-Z0-9]*([0-9]{2})[^a-zA-Z0-9]*([0-9]{4})/;
 function correctDate(date: string) {
-  const match = date.match(/([0-9]{2})[^a-zA-Z0-9]*([0-9]{2})[^a-zA-Z0-9]*([0-9]{4})/);
+  const match = date.match(KTP_DATE_REGEX);
   if (!match) {
     return null;
   }
@@ -32,7 +35,7 @@ function correctDate(date: string) {
 }
 
 function correctRTRW(rtRw: string) {
-  const match = rtRw.match(/([0-9]{3})\s*[^a-zA-Z0-9]\s*([0-9]{3})/);
+  const match = rtRw.match(/([0-9]{3})[^a-zA-Z0-9]*([0-9]{3})/);
   if (!match) {
     return null;
   }
@@ -48,15 +51,12 @@ function correctSex(value: string, history: string[]) {
   return correctByHistory(sex.toUpperCase(), ["PEREMPUAN", "LAKI-LAKI"]);
 }
 
-function correctStartsWith(expectedTag: string | string[]) {
-  return function (value: string) {
-    const [tag, ...actualValue] = value.split(' ');
-    const candidates = Array.isArray(expectedTag) ? expectedTag : [expectedTag];
-
-    return candidates.find(candidate => distance(tag.toLowerCase(), candidate.toLowerCase()) <= Math.ceil(candidate.length / 3))
-      ? actualValue.join('')
-      : null;
+function correctJakartaTerritory(value: string) {
+  const [tag, ...actualValue] = value.split(' ');
+  if (distance(tag.toUpperCase(), "JAKARTA") <= Math.ceil(8 / 3)) {
+    return `JAKARTA ${actualValue.join(' ').toUpperCase()}`;
   }
+  return null;
 }
 
 function correctNIK(value: string) {
@@ -91,7 +91,10 @@ const KTPCardOCRTargets = {
     index: null,
     hasHistory: true,
     corrector: mergeCorrectors([
-      correctStartsWith("KABUPATEN"),
+      anyCorrectors([
+        correctStartsWith("KABUPATEN"),
+        correctJakartaTerritory,
+      ]),
       correctAlphabet({
         withHistory: true,
         whitelist: ' ',
@@ -161,7 +164,7 @@ const KTPCardOCRTargets = {
     hasHistory: false,
     corrector: correctRTRW,
   } as KTPCardOCRTarget,
-  vilage: {
+  village: {
     key: "village",
     index: 5,
     hasHistory: true,

@@ -1,6 +1,6 @@
 import type { Line } from "tesseract.js";
 import OCRCanvas from "./canvas";
-import { correctByHistory } from "./utils";
+import { correctByHistory } from "./correctors"
 import SchedulerMultiplexor, { SchedulerMultiplexorConfig } from "./scheduler-multiplexor";
 
 export type OCRTarget = {

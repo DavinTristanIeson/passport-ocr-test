@@ -1,7 +1,8 @@
 import { closest, distance } from "fastest-levenshtein";
 import { OCRHistory, OCRResult, type OCRTarget } from "../ocr";
-import { combineUnique, correctAlphabet, correctByHistory, pad0 } from "../ocr/utils";
+import { correctAlphabet } from "../ocr/correctors";
 import { Bbox } from "tesseract.js";
+import { combineUnique, pad0 } from "../ocr/utils";
 
 export type PassportOCRTarget = OCRTarget & {
   isDate?: boolean;

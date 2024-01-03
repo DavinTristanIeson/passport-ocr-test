@@ -1,0 +1,84 @@
+import { closest, distance } from "fastest-levenshtein";
+import { combineUnique, trimWhitespace } from "./utils";
+
+export function correctByHistory(text: string, history: string[] | undefined) {
+  if (!text) return null;
+  text = trimWhitespace(text);
+  if (history && history.length > 0) {
+    const candidate = closest(text, history);
+    if (distance(text, candidate) <= Math.ceil(candidate.length / 3)) {
+      text = candidate;
+    }
+  }
+  return text;
+}
+
+export function correctAlphabet(options?: {
+  withHistory?: boolean;
+  maxLength?: number;
+  whitelist?: string;
+}) {
+  const withHistory = options?.withHistory ?? true;
+  const whitelist = options?.whitelist ?? '';
+  return (value: string, history?: string[]) => {
+    let text = Array.from(trimWhitespace(value)).filter(chr => {
+      const ascii = chr.charCodeAt(0);
+      const isUppercaseAlpha = 65 <= ascii && ascii <= 65 + 26;
+      return isUppercaseAlpha || whitelist.includes(chr)
+    }).join('').trim();
+    if (options?.maxLength !== undefined) {
+      text = text.substring(0, options.maxLength);
+    }
+    if (text.length === 0) {
+      return null;
+    }
+    return withHistory ? correctByHistory(text, history) : text;
+  }
+}
+
+export function correctEnums(enums: string[], options?: {
+  exact?: boolean;
+  history?: boolean;
+}) {
+  return (value: string, history?: string[]) => {
+    const candidates = (options?.history ?? true) && history ? combineUnique(enums, history) : enums;
+    const corrected = correctByHistory(trimWhitespace(value), candidates);
+    if (options?.exact && !candidates.find(x => x === corrected)) {
+      return null;
+    }
+    return corrected;
+  }
+}
+
+export function correctStartsWith(expectedTag: string | string[]) {
+  return function (value: string) {
+    const [tag, ...actualValue] = trimWhitespace(value).split(' ');
+    const candidates = Array.isArray(expectedTag) ? expectedTag : [expectedTag];
+
+    return candidates.find(candidate => distance(tag.toLowerCase(), candidate.toLowerCase()) <= Math.ceil(candidate.length / 3))
+      ? actualValue.join('')
+      : null;
+  }
+}
+
+export function mergeCorrectors(correctors: ((text: string, history: string[]) => string | null)[]) {
+  return function (text: string, history: string[]) {
+    let temp: string | null = text;
+    for (let corrector of correctors) {
+      temp = corrector(temp, history);
+      if (temp === null) break;
+    }
+    return temp;
+  }
+}
+export function anyCorrectors(correctors: ((text: string, history: string[]) => string | null)[]) {
+  return function (text: string, history: string[]) {
+    for (let corrector of correctors) {
+      const corrected = corrector(text, history);
+      if (corrected !== null) {
+        return corrected;
+      }
+    }
+    return null;
+  }
+}

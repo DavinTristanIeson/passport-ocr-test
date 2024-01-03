@@ -1,7 +1,7 @@
-import { createScheduler, type Bbox, createWorker, type Scheduler, type Word, type Line, type Rectangle } from "tesseract.js";
+import { type Scheduler, type Word, type Line, type Rectangle } from "tesseract.js";
 import { distance } from 'fastest-levenshtein';
 import { PassportOCRPreprocessMessageInput, PassportOCRPreprocessMessageOutput } from "./preprocess.worker";
-import OCR, { OCROptions, OCRResult, OCRTarget, OCRTargetReadResult } from "../ocr";
+import OCR, { OCROptions, OCRResult, OCRTargetReadResult } from "../ocr";
 import PassportOCRTargets, { PassportOCRTarget } from "./targets";
 import { copyImageData, runWorker } from "../ocr/utils";
 import OCRCanvas from "../ocr/canvas";
