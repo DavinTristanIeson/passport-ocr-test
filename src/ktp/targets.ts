@@ -1,14 +1,17 @@
+import { distance } from "fastest-levenshtein";
 import { OCRTarget } from "../ocr";
-import { correctAlphabet, correctByHistory, correctEnums, mergeCorrectors } from "../ocr/utils";
+import { anyCorrectors, correctAlphabet, correctByHistory, correctEnums, mergeCorrectors } from "../ocr/utils";
 
 export type KTPCardOCRTarget = OCRTarget & {
   index: number | null;
 };
 
+const bloodTypes = ["A", "B", "AB", "O"];
+bloodTypes.push(...bloodTypes.map(x => `${x}+`), ...bloodTypes.map(x => `${x}-`));
+
 function correctBloodType(bloodType: string) {
-  const bloodTypes = ["A", "B", "AB", "O"];
-  bloodTypes.push(...bloodTypes.map(x => `${x}+`), ...bloodTypes.map(x => `${x}-`));
-  return bloodTypes.find(bt => bt === bloodType) ?? null;
+  const cleanBlood = Array.from(bloodType).filter(chr => "ABO-+".includes(chr)).join('');
+  return bloodTypes.find(bt => bt === cleanBlood) ?? null;
 }
 function correctDate(date: string) {
   const match = date.match(/([0-9]{2})[^a-zA-Z0-9]*([0-9]{2})[^a-zA-Z0-9]*([0-9]{4})/);
@@ -45,34 +48,63 @@ function correctSex(value: string, history: string[]) {
   return correctByHistory(sex.toUpperCase(), ["PEREMPUAN", "LAKI-LAKI"]);
 }
 
+function correctStartsWith(expectedTag: string | string[]) {
+  return function (value: string) {
+    const [tag, ...actualValue] = value.split(' ');
+    const candidates = Array.isArray(expectedTag) ? expectedTag : [expectedTag];
+
+    return candidates.find(candidate => distance(tag.toLowerCase(), candidate.toLowerCase()) <= Math.ceil(candidate.length / 3))
+      ? actualValue.join('')
+      : null;
+  }
+}
+
+function correctNIK(value: string) {
+  const corrected = Array.from(value).filter(x => {
+    const ascii = x.charCodeAt(0);
+    return 48 <= ascii && ascii <= 48 + 9;
+  }).join('');
+  return (corrected.length === 0 ? null : corrected);
+}
+
 const KTPCardOCRTargets = {
   NIK: {
     key: "NIK",
     index: null,
+    corrector: correctNIK,
   } as KTPCardOCRTarget,
   province: {
     key: "province",
     index: null,
-    corrector: correctAlphabet({
-      withHistory: true,
-      withSpaces: true,
-    }),
+    corrector: mergeCorrectors([
+      correctStartsWith("PROVINSI"),
+      correctAlphabet({
+        withHistory: true,
+        whitelist: ' ',
+      }),
+    ])
   } as KTPCardOCRTarget,
   regency: {
     key: "regency",
     index: null,
-    corrector: correctAlphabet({
-      withHistory: true,
-      withSpaces: true,
-    })
+    corrector: mergeCorrectors([
+      correctStartsWith("KABUPATEN"),
+      correctAlphabet({
+        withHistory: true,
+        whitelist: ' ',
+      }),
+    ])
   } as KTPCardOCRTarget,
   city: {
     key: "city",
     index: null,
-    corrector: correctAlphabet({
-      withHistory: true,
-      withSpaces: true,
-    })
+    corrector: mergeCorrectors([
+      correctStartsWith("KOTA"),
+      correctAlphabet({
+        withHistory: true,
+        whitelist: ' ',
+      }),
+    ])
   } as KTPCardOCRTarget,
   bloodType: {
     key: "bloodType",
@@ -84,7 +116,7 @@ const KTPCardOCRTargets = {
     index: 0,
     corrector: correctAlphabet({
       withHistory: true,
-      withSpaces: true,
+      whitelist: ' ',
     })
   } as KTPCardOCRTarget,
   placeOfBirth: {
@@ -92,7 +124,7 @@ const KTPCardOCRTargets = {
     index: null,
     corrector: correctAlphabet({
       withHistory: true,
-      withSpaces: true,
+      whitelist: ' ',
     }),
   } as KTPCardOCRTarget,
   dateOfBirth: {
@@ -110,7 +142,7 @@ const KTPCardOCRTargets = {
     index: 3,
     corrector: correctAlphabet({
       withHistory: true,
-      withSpaces: true,
+      whitelist: ' -',
     })
   } as KTPCardOCRTarget,
   "RT/RW": {
@@ -123,7 +155,7 @@ const KTPCardOCRTargets = {
     index: 5,
     corrector: correctAlphabet({
       withHistory: true,
-      withSpaces: true,
+      whitelist: ' ',
     })
   } as KTPCardOCRTarget,
   district: {
@@ -131,7 +163,7 @@ const KTPCardOCRTargets = {
     index: 6,
     corrector: correctAlphabet({
       withHistory: true,
-      withSpaces: true,
+      whitelist: ' ',
     })
   } as KTPCardOCRTarget,
   religion: {
@@ -140,7 +172,6 @@ const KTPCardOCRTargets = {
     corrector: mergeCorrectors([
       correctAlphabet({
         withHistory: false,
-        withSpaces: false,
       }),
       correctEnums([
         // SOURCE: https://news.detik.com/berita/d-2424439/hanya-6-agama-yang-boleh-ditulis-di-e-ktp
@@ -159,7 +190,7 @@ const KTPCardOCRTargets = {
     corrector: mergeCorrectors([
       correctAlphabet({
         withHistory: false,
-        withSpaces: true,
+        whitelist: ' ',
       }),
       correctEnums([
         // SOURCE: https://news.detik.com/berita/d-6457733/cara-dan-syarat-mengubah-status-ktp-menjadi-kawin
@@ -177,7 +208,7 @@ const KTPCardOCRTargets = {
     index: 9,
     corrector: correctAlphabet({
       withHistory: true,
-      withSpaces: true,
+      whitelist: ' /-',
     })
   } as KTPCardOCRTarget,
   citizenship: {
@@ -185,13 +216,18 @@ const KTPCardOCRTargets = {
     index: 10,
     corrector: correctAlphabet({
       withHistory: true,
-      withSpaces: false,
     })
   } as KTPCardOCRTarget,
   validUntil: {
     key: "validUntil",
     index: 11,
-    corrector: correctDate,
+    corrector: anyCorrectors([
+      correctDate,
+      correctEnums(["SEUMUR HIDUP"], {
+        exact: true,
+        history: false,
+      })
+    ]),
   } as KTPCardOCRTarget,
 }
 export default KTPCardOCRTargets;

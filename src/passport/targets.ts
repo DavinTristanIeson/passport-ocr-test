@@ -121,7 +121,7 @@ const PassportOCRTargets = {
     },
     corrector: correctAlphabet({
       withHistory: false,
-      withSpaces: true,
+      whitelist: ' ',
     }),
   } as PassportOCRTarget,
   sex: {
@@ -144,7 +144,7 @@ const PassportOCRTargets = {
     },
     corrector: correctAlphabet({
       withHistory: true,
-      withSpaces: true,
+      whitelist: ' ',
     }),
   } as PassportOCRTarget,
   dateOfBirth: {
@@ -178,7 +178,7 @@ const PassportOCRTargets = {
     },
     corrector: correctAlphabet({
       withHistory: true,
-      withSpaces: true,
+      whitelist: ' ',
     }),
   } as PassportOCRTarget,
   dateOfIssue: {
@@ -222,7 +222,7 @@ const PassportOCRTargets = {
     },
     corrector: correctAlphabet({
       withHistory: true,
-      withSpaces: true,
+      whitelist: ' ',
     }),
   } as PassportOCRTarget
 };

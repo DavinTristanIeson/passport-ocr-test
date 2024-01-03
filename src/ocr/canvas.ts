@@ -144,8 +144,10 @@ export default class OCRCanvas {
   toWidth(width: number, options?: {
     // If the width exceeds recommendedWidth, should the image be downscaled or not
     shouldDownscale?: boolean;
+    keepAspectRatio?: boolean;
   }) {
     const shouldDownscale = options?.shouldDownscale ?? true;
+    const keepAspectRatio = options?.keepAspectRatio ?? true;
     if (this.canvas.width > width && !shouldDownscale) {
       return this;
     }
@@ -154,7 +156,9 @@ export default class OCRCanvas {
     const ctx = this.context;
     const imageCopy = copyImageData(ctx.getImageData(0, 0, this.canvas.width, this.canvas.height));
     this.canvas.width = width;
-    this.canvas.height = this.canvas.height * scaleFactor;
+    if (keepAspectRatio) {
+      this.canvas.height = this.canvas.height * scaleFactor;
+    }
     ctx.drawImage(imageCopy, 0, 0, this.canvas.width, this.canvas.height);
     return this;
   }
