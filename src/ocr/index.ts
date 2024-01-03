@@ -5,6 +5,7 @@ import SchedulerMultiplexor, { SchedulerMultiplexorConfig } from "./scheduler-mu
 
 export type OCRTarget = {
   key: string;
+  hasHistory?: boolean;
   corrector?: ((value: string, history: string[] | undefined) => string | null) | boolean;
 }
 export type OCRTargetReadResult = { text: string, confidence: number };
@@ -80,7 +81,8 @@ export default abstract class OCR<TTarget extends Record<string, OCRTarget>, TVa
     for (const rawKey of Object.keys(this.targets)) {
       const key = rawKey as keyof TTarget;
       const targetCorrector = this.targets[key].corrector;
-      if (!targetCorrector) {
+      const hasHistory = this.targets[key].hasHistory;
+      if (!targetCorrector || !hasHistory) {
         continue;
       }
       const value = payload[key];

@@ -71,11 +71,13 @@ const KTPCardOCRTargets = {
   NIK: {
     key: "NIK",
     index: null,
+    hasHistory: false,
     corrector: correctNIK,
   } as KTPCardOCRTarget,
   province: {
     key: "province",
     index: null,
+    hasHistory: true,
     corrector: mergeCorrectors([
       correctStartsWith("PROVINSI"),
       correctAlphabet({
@@ -87,6 +89,7 @@ const KTPCardOCRTargets = {
   regency: {
     key: "regency",
     index: null,
+    hasHistory: true,
     corrector: mergeCorrectors([
       correctStartsWith("KABUPATEN"),
       correctAlphabet({
@@ -98,6 +101,7 @@ const KTPCardOCRTargets = {
   city: {
     key: "city",
     index: null,
+    hasHistory: true,
     corrector: mergeCorrectors([
       correctStartsWith("KOTA"),
       correctAlphabet({
@@ -109,11 +113,13 @@ const KTPCardOCRTargets = {
   bloodType: {
     key: "bloodType",
     index: null,
+    hasHistory: false,
     corrector: correctBloodType,
   } as KTPCardOCRTarget,
   name: {
     key: "name",
     index: 0,
+    hasHistory: false,
     corrector: correctAlphabet({
       withHistory: true,
       whitelist: ' ',
@@ -122,6 +128,7 @@ const KTPCardOCRTargets = {
   placeOfBirth: {
     key: "placeOfBirth",
     index: null,
+    hasHistory: true,
     corrector: correctAlphabet({
       withHistory: true,
       whitelist: ' ',
@@ -130,29 +137,34 @@ const KTPCardOCRTargets = {
   dateOfBirth: {
     key: "dateOfBirth",
     index: null,
+    hasHistory: false,
     corrector: correctDate,
   } as KTPCardOCRTarget,
   sex: {
     key: "sex",
     index: 2,
+    hasHistory: false,
     corrector: correctSex,
   } as KTPCardOCRTarget,
   address: {
     key: "address",
     index: 3,
+    hasHistory: false,
     corrector: correctAlphabet({
-      withHistory: true,
+      withHistory: false,
       whitelist: ' -',
     })
   } as KTPCardOCRTarget,
   "RT/RW": {
     key: "RT/RW",
     index: 4,
+    hasHistory: false,
     corrector: correctRTRW,
   } as KTPCardOCRTarget,
   vilage: {
     key: "village",
     index: 5,
+    hasHistory: true,
     corrector: correctAlphabet({
       withHistory: true,
       whitelist: ' ',
@@ -161,6 +173,7 @@ const KTPCardOCRTargets = {
   district: {
     key: "district",
     index: 6,
+    hasHistory: true,
     corrector: correctAlphabet({
       withHistory: true,
       whitelist: ' ',
@@ -169,6 +182,7 @@ const KTPCardOCRTargets = {
   religion: {
     key: "religion",
     index: 7,
+    hasHistory: true,
     corrector: mergeCorrectors([
       correctAlphabet({
         withHistory: false,
@@ -187,6 +201,7 @@ const KTPCardOCRTargets = {
   marriageStatus: {
     key: "marriageStatus",
     index: 8,
+    hasHistory: true,
     corrector: mergeCorrectors([
       correctAlphabet({
         withHistory: false,
@@ -206,14 +221,16 @@ const KTPCardOCRTargets = {
   occupation: {
     key: "occupation",
     index: 9,
+    hasHistory: true,
     corrector: correctAlphabet({
       withHistory: true,
-      whitelist: ' /-',
+      whitelist: ' /',
     })
   } as KTPCardOCRTarget,
   citizenship: {
     key: "citizenship",
     index: 10,
+    hasHistory: true,
     corrector: correctAlphabet({
       withHistory: true,
     })
@@ -221,6 +238,7 @@ const KTPCardOCRTargets = {
   validUntil: {
     key: "validUntil",
     index: 11,
+    hasHistory: false,
     corrector: anyCorrectors([
       correctDate,
       correctEnums(["SEUMUR HIDUP"], {

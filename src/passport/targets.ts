@@ -1,6 +1,6 @@
 import { closest, distance } from "fastest-levenshtein";
 import { OCRHistory, OCRResult, type OCRTarget } from "../ocr";
-import { correctAlphabet, correctByHistory, pad0 } from "../ocr/utils";
+import { combineUnique, correctAlphabet, correctByHistory, pad0 } from "../ocr/utils";
 import { Bbox } from "tesseract.js";
 
 export type PassportOCRTarget = OCRTarget & {
@@ -65,11 +65,10 @@ function correctSex(value: string, history: string[] | undefined) {
   const match = value.toUpperCase().match(/([A-Z])\/*([A-Z])/);
   if (!match) return null;
   let sex = `${match[1]}/${match[2]}`;
-  if (history && history.length > 0) {
-    const closestMatch = closest(sex, history);
-    if (distance(sex, closestMatch) <= 1) {
-      sex = closestMatch;
-    }
+  const enums = combineUnique(["L/M", "P/F"], history ?? []);
+  const closestMatch = closest(sex, enums);
+  if (distance(sex, closestMatch) <= 1) {
+    sex = closestMatch;
   }
   return sex;
 }
@@ -95,14 +94,16 @@ const PassportOCRTargets = {
       x1: 0.560,
       y1: 0.200
     },
+    hasHistory: true,
     corrector: correctAlphabet({
-      withSpaces: false,
+      whitelist: ' ',
       withHistory: true,
       maxLength: 3,
     }),
   } as PassportOCRTarget,
   passportNumber: {
     key: "passportNumber",
+    hasHistory: false,
     bbox: {
       x0: 0.600,
       y0: 0.060,
@@ -113,6 +114,7 @@ const PassportOCRTargets = {
   } as PassportOCRTarget,
   fullName: {
     key: "fullName",
+    hasHistory: false,
     bbox: {
       x0: 0.000,
       y0: 0.230,
@@ -126,6 +128,7 @@ const PassportOCRTargets = {
   } as PassportOCRTarget,
   sex: {
     key: "sex",
+    hasHistory: true,
     bbox: {
       x0: 0.820,
       y0: 0.230,
@@ -136,6 +139,7 @@ const PassportOCRTargets = {
   } as PassportOCRTarget,
   nationality: {
     key: "nationality",
+    hasHistory: true,
     bbox: {
       x0: 0.000,
       y0: 0.380,
@@ -149,6 +153,7 @@ const PassportOCRTargets = {
   } as PassportOCRTarget,
   dateOfBirth: {
     key: "dateOfBirth",
+    hasHistory: false,
     bbox: {
       x0: 0.000,
       y0: 0.540,
@@ -170,6 +175,7 @@ const PassportOCRTargets = {
   } as PassportOCRTarget,
   placeOfBirth: {
     key: "placeOfBirth",
+    hasHistory: true,
     bbox: {
       x0: 0.560,
       y0: 0.540,
@@ -183,6 +189,7 @@ const PassportOCRTargets = {
   } as PassportOCRTarget,
   dateOfIssue: {
     key: "dateOfIssue",
+    hasHistory: false,
     bbox: {
       x0: 0.000,
       y0: 0.700,
@@ -194,6 +201,7 @@ const PassportOCRTargets = {
   } as PassportOCRTarget,
   dateOfExpiry: {
     key: "dateOfExpiry",
+    hasHistory: false,
     bbox: {
       x0: 0.640,
       y0: 0.700,
@@ -205,6 +213,7 @@ const PassportOCRTargets = {
   } as PassportOCRTarget,
   // regNumber: {
   //   key: "regNumber",
+  //   hasHistory: false,
   //   bbox: {
   //     x0: 0.000,
   //     y0: 0.860,
@@ -214,6 +223,7 @@ const PassportOCRTargets = {
   // } as PassportOCRTarget,
   issuingOffice: {
     key: "issuingOffice",
+    hasHistory: true,
     bbox: {
       x0: 0.500,
       y0: 0.860,

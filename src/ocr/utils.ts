@@ -55,12 +55,16 @@ export function correctAlphabet(options?: {
   }
 }
 
+export function combineUnique<T>(a: T[], b: T[]) {
+  return Array.from(new Set(a.concat(b)));
+}
+
 export function correctEnums(enums: string[], options?: {
   exact?: boolean;
   history?: boolean;
 }) {
   return (value: string, history?: string[]) => {
-    const candidates = (options?.history ?? true) && history ? enums.concat(history) : enums;
+    const candidates = (options?.history ?? true) && history ? combineUnique(enums, history) : enums;
     const corrected = correctByHistory(value, candidates);
     if (options?.exact && !candidates.find(x => x === corrected)) {
       return null;

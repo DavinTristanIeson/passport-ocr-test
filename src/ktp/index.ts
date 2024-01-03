@@ -76,7 +76,7 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
     const canvasCopy = new OCRCanvas(copyImageData(this.canvas.context.getImageData(0, 0, this.canvas.width, this.canvas.height)));
 
     const rect = await this.locateViewAreaTop();
-    this.canvas.crop(rect);
+    this.canvas.crop(rect, rect.angle);
     await this.debugImage();
     const bottomY = await this.locateViewAreaBottom();
     this.canvas.crop({
@@ -191,7 +191,7 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
     return {
       left: x0,
       top: y0,
-      width: provinsiWidth * 2.7,
+      width: provinsiWidth * 2.8,
       height: provinsiWidth * 2.7,
       angle,
       wordWidth: provinsiWidth,
