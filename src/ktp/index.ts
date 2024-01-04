@@ -13,7 +13,7 @@ export type KTPCardOCROptions = OCROptions<typeof KTPCardOCRTargets> & {
 };
 
 enum SchedulerKeys {
-  // number = "number",
+  number = "number",
   // alphabet = "alphabet",
   default = "default",
 }
@@ -37,17 +37,17 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
     super({
       ...options,
       multiplexorConfig: {
-        // [SchedulerKeys.number]: {
-        //   count: 1,
-        //   initOptions: {
-        //     load_freq_dawg: '0',
-        //     load_number_dawg: '0',
-        //     load_system_dawg: '0',
-        //   },
-        //   params: {
-        //     tessedit_char_whitelist: '0123456789'
-        //   }
-        // },
+        [SchedulerKeys.number]: {
+          count: 1,
+          initOptions: {
+            load_freq_dawg: '0',
+            load_number_dawg: '0',
+            load_system_dawg: '0',
+          },
+          params: {
+            tessedit_char_whitelist: '0123456789'
+          }
+        },
         // [SchedulerKeys.alphabet]: {
         //   count: 1,
         //   initOptions: {
@@ -63,7 +63,7 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
         //   }
         // },
         [SchedulerKeys.default]: {
-          count: 3,
+          count: 2,
           initOptions: {
             load_freq_dawg: '0',
             load_number_dawg: '0',
@@ -125,21 +125,31 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
   /** Gets information only available at the top of the KTP card such as province, regency/city, and NIK */
   private async recognizeKTPTopInformation(canvas: OCRCanvas) {
     const scheduler = await this.multiplexor.getScheduler(SchedulerKeys.default);
+    const numberScheduler = await this.multiplexor.getScheduler(SchedulerKeys.number);
     const imgUrl = canvas.toDataURL();
     // Splitting the image up into three sections makes the OCR output gibberish. I have no idea why.
     // Just scan the entirety of the image.
-    const result = await scheduler.addJob("recognize", imgUrl);
+    const [result, nikResult] = await Promise.all([
+      // Segmenting this with rectangle makes the output worse in quality
+      scheduler.addJob("recognize", imgUrl),
+      numberScheduler.addJob("recognize", imgUrl, {
+        rectangle: canvas.getCanvasRectFromRelativeRect({
+          x0: 0,
+          x1: 0.8,
+          y0: 0.5,
+          y1: 1,
+        })
+      })
+    ]);
     await this.debugImage(imgUrl);
 
-    const relevantLines = result.data.lines.slice(result.data.lines.length - 3);
+    const relevantLines = result.data.lines.slice(Math.max(0, result.data.lines.length - 3));
     const provinceLine = relevantLines[0];
     const regencyCityLine = relevantLines[1];
-    const nikLine = relevantLines[2];
+    const nikLine = nikResult.data.lines[nikResult.data.lines.length - 1];
 
     const regencyParsed = regencyCityLine ? this.processLine(this.targets.regency, regencyCityLine) : null;
-    const nikString = this.gatherPartsOfNIK(nikLine)?.text;
-
-    console.log(result.data);
+    const nikString = nikLine && this.gatherPartsOfNIK(nikLine)?.text;
 
     return {
       province: provinceLine ? this.processLine(this.targets.province, provinceLine) : null,
@@ -151,23 +161,6 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
     };
   }
 
-  private async recognizeBloodType() {
-    const scheduler = await this.multiplexor.getScheduler(SchedulerKeys.default);
-    const rectangle = this.canvas.getCanvasRectFromRelativeRect({
-      x0: 0.8,
-      x1: 1,
-      y0: 0.15,
-      y1: 0.3,
-    });
-    const result = await scheduler.addJob("recognize", this.canvas.toDataURL(), { rectangle });
-    // await this.canvas.markBoxes([rectangle]);
-    // await this.debugImage();
-    const line = result.data.lines[0];
-    if (!line) {
-      return null;
-    }
-    return this.processLine(this.targets.bloodType, line);
-  }
 
   private async locateViewAreaBottom(): Promise<number> {
     const scheduler = await this.multiplexor.getScheduler(SchedulerKeys.default);
@@ -218,7 +211,6 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
     const scheduler = await this.multiplexor.getScheduler(SchedulerKeys.default);
 
     const result = await scheduler.addJob("recognize", this.canvas.toDataURL());
-    console.log(result.data.lines);
 
     let provinsiWord: Bbox | undefined, surroundingWord: Bbox | undefined, nikWord: Bbox | undefined;
     for (const line of result.data.lines) {
@@ -252,8 +244,9 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
     ]);
     await this.debugImage();
     const nikWidth = nikWord.x1 - nikWord.x0;
+    const nikHeight = nikWord.y1 - nikWord.y0;
     const x0 = nikWord.x0;
-    const y0 = nikWord.y1
+    const y0 = nikWord.y1 + nikHeight * 0.1;
 
 
     const angle = !surroundingWord || !provinsiWord ? 0 : Math.atan2(
@@ -280,16 +273,13 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
       payload[key as keyof KTPCardOCRResult] = null;
     }
 
-    const [result, ktpTop, bloodType] = await Promise.all([
+    const [result, ktpTop] = await Promise.all([
       scheduler.addJob("recognize", this.canvas.toDataURL()),
       recognizeKTPTopInfo(),
-      this.recognizeBloodType(),
     ]);
-    console.log(result.data);
     for (const key of Object.keys(ktpTop)) {
       payload[key as keyof KTPCardOCRResult] = ktpTop[key as keyof typeof ktpTop];
     }
-    payload.bloodType = bloodType;
 
     let placeOfBirth = trimWhitespace(result.data.lines[1].text);
     const dateOfBirthMatch = placeOfBirth.match(KTP_DATE_REGEX);
@@ -299,6 +289,11 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
     }
     payload.placeOfBirth = dateOfBirthMatch ? this.processLine(this.targets.placeOfBirth, placeOfBirth) : null;
 
+    let sex = trimWhitespace(result.data.lines[2].text);
+    const wordsInSexRow = sex.split(' ');
+    const bloodType = wordsInSexRow[wordsInSexRow.length - 1];
+    payload.sex = wordsInSexRow[0] ? this.processLine(this.targets.sex, sex[0]) : wordsInSexRow[0];
+    payload.bloodType = bloodType ? this.processLine(this.targets.bloodType, bloodType) : null;
 
     const indicesToTargetMap: Record<number, KTPCardOCRTarget> = {};
     for (const key of Object.keys(this.targets)) {

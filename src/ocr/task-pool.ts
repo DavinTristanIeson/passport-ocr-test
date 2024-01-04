@@ -51,7 +51,6 @@ export default class TaskPool<T> {
     // Claim the current index and increment it for other tasks
     const index = tracker.index++;
     const result = await this.task(index);
-    // console.log(result, index, JSON.stringify(tracker));
     if (tracker.shortCircuit) {
       return;
     }
