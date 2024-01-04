@@ -7,10 +7,12 @@ export type KTPCardOCRTarget = OCRTarget & {
   index: number | null;
 };
 
+// Constant for blood type, contain all + and - variants of the basic four types.
 const bloodTypes = ["A", "B", "AB", "O"];
 bloodTypes.push(...bloodTypes.map(x => `${x}+`), ...bloodTypes.map(x => `${x}-`));
 
 function correctBloodType(bloodType: string) {
+  // Remove all characters that are not A, B, O, -, or +. We need to find an exact match
   const cleanBlood = Array.from(bloodType).filter(chr => "ABO-+".includes(chr)).join('');
   return bloodTypes.find(bt => bt === cleanBlood) ?? null;
 }
@@ -49,10 +51,13 @@ function correctSex(value: string, history: string[]) {
   // SOURCE: https://www.kompas.com/tren/read/2021/06/06/181500165/penjelasan-dukcapil-soal-alur-dan-jenis-kelamin-ktp-el-transgender
   const closest = correctByHistory(value.toUpperCase(), enums);
   const result = enums.find((candidate) => candidate === closest) ?? null;
+  // Sometimes, the OCR'ed field doesn't have a hyphen between the two LAKIs, so it just becomes "LAKI LAKI", which when split becomes LAKI.
   return (result === "LAKI" ? "LAKI-LAKI" : result);
 }
 
 function correctJakartaTerritory(value: string) {
+  // And of course there must be an exception for Jakarta.
+  // Jakarta doesn't start with Kabupaten or Kota.
   const [tag, ...actualValue] = value.split(' ');
   if (distance(tag.toUpperCase(), "JAKARTA") <= Math.ceil(8 / 3)) {
     return `JAKARTA ${actualValue.join(' ').toUpperCase()}`;
@@ -80,6 +85,7 @@ const KTPCardOCRTargets = {
     index: null,
     hasHistory: true,
     corrector: mergeCorrectors([
+      // Correct alphabet will clean the input up first, and then startsWith will check if the string matches the condition, and finally the result is matched with historical data
       correctAlphabet({
         withHistory: false,
         whitelist: ' ',

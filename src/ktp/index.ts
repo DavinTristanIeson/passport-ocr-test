@@ -74,7 +74,9 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
     }
   }
 
+  /** Locates the relevant passport section in the image */
   private async locateViewArea() {
+    // Erase colors except black/dark ones.
     const worker = new Worker(new URL("./preprocess.worker.ts", import.meta.url));
     const ctx = this.canvas.context;
     const imageData = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height)
@@ -86,11 +88,14 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
     ctx.putImageData(new ImageData(procImage, imageData.width, imageData.height), 0, 0);
     await this.debugImage();
 
+    // Copy is required because top of KTP is excluded from the view area
     const canvasCopy = new OCRCanvas(copyImageData(this.canvas.context.getImageData(0, 0, this.canvas.width, this.canvas.height)));
 
     const rect = await this.locateViewAreaTop();
     this.canvas.crop(rect, rect.angle);
     await this.debugImage();
+
+    // Removed for now since it's not as useful as its counterpart in PassportOCR
     // const bottomY = await this.locateViewAreaBottom();
     // this.canvas.crop({
     //   left: 0,
@@ -103,6 +108,7 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
 
     return async () => {
       const height = rect.wordHeight * 6;
+      // Crop the relevant passport top section
       canvasCopy.crop({
         left: rect.left - rect.wordWidth * 0.5,
         top: rect.top - height,
@@ -128,14 +134,16 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
     ]);
     await this.debugImage(imgUrl);
 
+    // Find the anchor (provinsi) to determine which lines are relevant
     let findProvince = correctStartsWith(["provinsi"]);
     let provinceIndex = result.data.lines.findIndex((value) => findProvince(value.text) !== null);
     if (provinceIndex === -1) {
       provinceIndex = Math.max(0, result.data.lines.length - 3);
     }
-    const relevantLines = result.data.lines.slice(provinceIndex);
+    const relevantLines = result.data.lines.slice(provinceIndex, provinceIndex + 3);
     const provinceLine = relevantLines[0];
     const regencyCityLine = relevantLines[1];
+    // NIK is just grabbed as the last line in NIK result
     const nikLine = nikResult.data.lines[nikResult.data.lines.length - 1];
     console.log(result.data, nikResult.data);
 
@@ -151,10 +159,12 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
     };
   }
 
+  /** Gets the correct NIK bounding box since Tesseract OCR might split NIK up into several gibberish sections */
   private getNIKBoundingBox(line: Line): {
     text: string;
     bbox: Bbox;
   } | null {
+    // Locate NIK to mark the start of the bounding box
     const startIdx = line.words.findIndex(word => distance(word.text.trim(), "NIK") <= 1);
     if (startIdx === -1 || startIdx === line.words.length - 1) {
       return null;
@@ -163,6 +173,7 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
     let text = line.words[startIdx + 1].text.trim();
     let bbox = { ...line.words[startIdx + 1].bbox };
 
+    // Get the maximum distance between characters/symbols
     let maxSymbolDistance = 0;
     const exampleSymbols = line.words[startIdx].symbols;
     let prevSymbolX1 = exampleSymbols[0].bbox.x1;
@@ -172,14 +183,17 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
       prevSymbolX1 = symbol.bbox.x1;
     }
 
+    // Words can be at most 6 characters away from each other
     const maxWordDistance = maxSymbolDistance * 6;
     let prevWordX1 = line.words[startIdx + 1].bbox.x1;
     for (let i = startIdx + 1; i < line.words.length; i++) {
       const word = line.words[i];
       const wordDistance = word.bbox.x0 - prevWordX1;
+      // If any gap between words exceed that distance, then we stop expanding the box
       if (maxWordDistance < wordDistance) {
         break;
       }
+      // Expand the bounding box and add the new text
       bbox.y0 = Math.min(bbox.y0, word.bbox.y0);
       bbox.y1 = Math.max(bbox.y1, word.bbox.y1);
       bbox.x1 = word.bbox.x1;
@@ -197,6 +211,9 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
     const result = await scheduler.addJob("recognize", this.canvas.toDataURL());
 
     let provinsiWord: Bbox | undefined, surroundingWord: Bbox | undefined, nikWord: Bbox | undefined;
+    /* Using TaskPool like in passport will not help much since the output becomes gibberish for some reason.
+    Besides, due to how I performed OCR in this case, we don't need many workers (can't even parallelize it due to the gibberish output, no idea why).
+    So, splitting it into many sections will just result in worse quality and time (since not much can be parallelized unless you want to add web worker overhead) */
     for (const line of result.data.lines) {
       nikWord = this.getNIKBoundingBox(line)?.bbox;
 
@@ -231,6 +248,7 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
     const y0 = nikWord.y1 + nikHeight * 0.1;
 
 
+    // Calculate the angle based on Provinsi and the name next to it.
     const angle = !surroundingWord || !provinsiWord ? 0 : Math.atan2(
       ((surroundingWord.y0 - provinsiWord.y0) + (surroundingWord.y1 - provinsiWord.y1)) / 2 / this.canvas.height,
       (surroundingWord.x1 - provinsiWord.x0) / this.canvas.width);
@@ -252,6 +270,7 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
     const scheduler = await this.multiplexor.getScheduler(SchedulerKeys.default);
 
     const payload: KTPCardOCRResult = {} as any;
+    // Initialize payload with null values
     for (let key of Object.keys(this.targets)) {
       payload[key as keyof KTPCardOCRResult] = null;
     }
@@ -260,15 +279,18 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
       scheduler.addJob("recognize", this.canvas.toDataURL()),
       recognizeKTPTopInfo(),
     ]);
+    // Just shove whatever ``recognizeKTPTopInfo`` found into the payload.
     for (const key of Object.keys(ktpTop)) {
       payload[key as keyof KTPCardOCRResult] = ktpTop[key as keyof typeof ktpTop];
     }
 
+    // Usually, place of birth and date of birth is located side-by-side
     let placeOfBirth = trimWhitespace(result.data.lines[1].text);
     let dateOfBirthMatch = placeOfBirth.match(KTP_DATE_REGEX);
     if (dateOfBirthMatch) {
       placeOfBirth = placeOfBirth.slice(0, dateOfBirthMatch.index);
     } else {
+      // But, place of birth and date of birth can be in different lines if place of birth is too long, so we need an extra check
       dateOfBirthMatch = trimWhitespace(result.data.lines[2].text).match(KTP_DATE_REGEX);
       if (dateOfBirthMatch) {
         result.data.lines.splice(2, 1);
@@ -277,12 +299,15 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
     payload.dateOfBirth = dateOfBirthMatch ? this.processLine(this.targets.dateOfBirth, dateOfBirthMatch[0]) : null;
     payload.placeOfBirth = dateOfBirthMatch ? this.processLine(this.targets.placeOfBirth, placeOfBirth) : null;
 
-    const sexRow = trimWhitespace(result.data.lines[2].text);
-    const wordsInSexRow = sexRow.split(' ');
+    // Sex and blood type is on the same row
+    const wordsInSexRow = trimWhitespace(result.data.lines[2].text).split(' ');
+    // Just grab the last item in the row as the blood type. The corrector will handle it anyway.
     const bloodType = wordsInSexRow[wordsInSexRow.length - 1];
+    // At the same time, just grab the first item in the row as sex.
     payload.sex = wordsInSexRow[0] ? this.processLine(this.targets.sex, wordsInSexRow[0]) : null;
     payload.bloodType = bloodType ? this.processLine(this.targets.bloodType, bloodType) : null;
 
+    // We use ``index`` rather than ``bbox`` to mark the position of the targets. Create a mapping that maps an index to an ocr target.
     const indicesToTargetMap: Record<number, KTPCardOCRTarget> = {};
     for (const key of Object.keys(this.targets)) {
       const target = this.targets[key as keyof typeof this.targets];
