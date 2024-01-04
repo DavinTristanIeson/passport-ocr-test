@@ -45,10 +45,11 @@ function correctRTRW(rtRw: string) {
 }
 
 function correctSex(value: string, history: string[]) {
-  const sex = value.split(' ')[0];
-  if (!sex) return null;
+  const enums = ["PEREMPUAN", "LAKI-LAKI", "LAKI"];
   // SOURCE: https://www.kompas.com/tren/read/2021/06/06/181500165/penjelasan-dukcapil-soal-alur-dan-jenis-kelamin-ktp-el-transgender
-  return correctByHistory(sex.toUpperCase(), ["PEREMPUAN", "LAKI-LAKI"]);
+  const closest = correctByHistory(value.toUpperCase(), enums);
+  const result = enums.find((candidate) => candidate === closest) ?? null;
+  return (result === "LAKI" ? "LAKI-LAKI" : result);
 }
 
 function correctJakartaTerritory(value: string) {
@@ -79,11 +80,12 @@ const KTPCardOCRTargets = {
     index: null,
     hasHistory: true,
     corrector: mergeCorrectors([
-      correctStartsWith("PROVINSI"),
       correctAlphabet({
-        withHistory: true,
+        withHistory: false,
         whitelist: ' ',
       }),
+      correctStartsWith("PROVINSI"),
+      correctByHistory,
     ])
   } as KTPCardOCRTarget,
   regency: {
@@ -91,14 +93,15 @@ const KTPCardOCRTargets = {
     index: null,
     hasHistory: true,
     corrector: mergeCorrectors([
+      correctAlphabet({
+        withHistory: false,
+        whitelist: ' ',
+      }),
       anyCorrectors([
         correctStartsWith("KABUPATEN"),
         correctJakartaTerritory,
       ]),
-      correctAlphabet({
-        withHistory: true,
-        whitelist: ' ',
-      }),
+      correctByHistory,
     ])
   } as KTPCardOCRTarget,
   city: {
@@ -106,11 +109,12 @@ const KTPCardOCRTargets = {
     index: null,
     hasHistory: true,
     corrector: mergeCorrectors([
-      correctStartsWith("KOTA"),
       correctAlphabet({
-        withHistory: true,
+        withHistory: false,
         whitelist: ' ',
       }),
+      correctStartsWith("KOTA"),
+      correctByHistory,
     ])
   } as KTPCardOCRTarget,
   bloodType: {
@@ -145,9 +149,14 @@ const KTPCardOCRTargets = {
   } as KTPCardOCRTarget,
   sex: {
     key: "sex",
-    index: 2,
+    index: null,
     hasHistory: false,
-    corrector: correctSex,
+    corrector: mergeCorrectors([
+      correctAlphabet({
+        whitelist: '-'
+      }),
+      correctSex
+    ]),
   } as KTPCardOCRTarget,
   address: {
     key: "address",
@@ -234,9 +243,15 @@ const KTPCardOCRTargets = {
     key: "citizenship",
     index: 10,
     hasHistory: true,
-    corrector: correctAlphabet({
-      withHistory: true,
-    })
+    corrector: mergeCorrectors([
+      correctAlphabet({
+        withHistory: false,
+      }),
+      correctEnums(["WNI"], {
+        exact: false,
+        history: true,
+      })
+    ])
   } as KTPCardOCRTarget,
   validUntil: {
     key: "validUntil",

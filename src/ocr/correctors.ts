@@ -21,7 +21,7 @@ export function correctAlphabet(options?: {
   const withHistory = options?.withHistory ?? true;
   const whitelist = options?.whitelist ?? '';
   return (value: string, history?: string[]) => {
-    let text = Array.from(trimWhitespace(value)).filter(chr => {
+    let text = Array.from(trimWhitespace(value.toUpperCase())).filter(chr => {
       const ascii = chr.charCodeAt(0);
       const isUppercaseAlpha = 65 <= ascii && ascii <= 65 + 26;
       return isUppercaseAlpha || whitelist.includes(chr)
@@ -51,11 +51,13 @@ export function correctEnums(enums: string[], options?: {
 }
 
 export function correctStartsWith(expectedTag: string | string[]) {
+  const candidates = (Array.isArray(expectedTag) ? expectedTag : [expectedTag]).map(x => x.toLowerCase());
   return function (value: string) {
     const [tag, ...actualValue] = trimWhitespace(value).split(' ');
-    const candidates = Array.isArray(expectedTag) ? expectedTag : [expectedTag];
+    const insensitiveTag = tag.toLowerCase();
+    const candidate = closest(insensitiveTag, candidates);
 
-    return candidates.find(candidate => distance(tag.toLowerCase(), candidate.toLowerCase()) <= Math.ceil(candidate.length / 3))
+    return distance(candidate, insensitiveTag) <= Math.ceil(candidate.length / 3)
       ? actualValue.join('')
       : null;
   }

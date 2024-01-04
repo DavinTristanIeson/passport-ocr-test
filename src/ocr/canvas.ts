@@ -13,6 +13,7 @@ interface CanvasPivot {
 export default class OCRCanvas {
   /** This can be attached to a DOM tree for debugging purposes. All painting operations to process images for OCR will be performed on this. */
   canvas: HTMLCanvasElement;
+  private _context: CanvasRenderingContext2D | undefined;
   constructor(canvas?: HTMLCanvasElement) {
     this.canvas = canvas ?? document.createElement('canvas');
   }
@@ -31,9 +32,13 @@ export default class OCRCanvas {
   }
 
   get context(): CanvasRenderingContext2D {
-    return this.canvas.getContext("2d", {
+    if (this._context) {
+      return this._context;
+    }
+    this._context = this.canvas.getContext("2d", {
       willReadFrequently: true,
     })!;
+    return this._context;
   }
 
   clear() {

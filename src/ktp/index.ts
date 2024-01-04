@@ -5,29 +5,19 @@ import { copyImageData, runWorker, trimWhitespace } from "../ocr/utils";
 import { KTPCardOCRPreprocessMessageInput, KTPCardOCRPreprocessMessageOutput } from "./preprocess.worker";
 import { distance } from "fastest-levenshtein";
 import OCRCanvas from "../ocr/canvas";
+import { correctStartsWith } from "../ocr/correctors";
 
 export type KTPCardOCRResult = OCRResult<typeof KTPCardOCRTargets>;
 export type KTPCardOCRHistory = OCRHistory<typeof KTPCardOCRTargets>;
 export type KTPCardOCROptions = OCROptions<typeof KTPCardOCRTargets> & {
   recommendedWidth: number;
+  recommendedKTPSectionWidth: number;
 };
 
 enum SchedulerKeys {
   number = "number",
   // alphabet = "alphabet",
   default = "default",
-}
-
-function countDigits(str: string) {
-  let countNumbers = 0;
-  for (let chr of str) {
-    const ascii = chr.charCodeAt(0);
-    const isDigit = 48 <= ascii && ascii <= 48 + 9;
-    if (isDigit) {
-      countNumbers++;
-    }
-  }
-  return countNumbers;
 }
 
 export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerKeys> {
@@ -65,12 +55,12 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
         [SchedulerKeys.default]: {
           count: 2,
           initOptions: {
-            load_freq_dawg: '0',
+            load_freq_dawg: '1',
             load_number_dawg: '0',
             load_system_dawg: '0',
           },
           params: {
-            tessedit_char_blacklist: `,"'“:`
+            tessedit_char_blacklist: `,."'“:`
           }
         }
       }
@@ -79,7 +69,8 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
       history: options?.history ?? {},
       historyLimit: options?.historyLimit ?? 10,
       onProcessImage: options?.onProcessImage,
-      recommendedWidth: options?.recommendedWidth ?? 1440,
+      recommendedWidth: options?.recommendedWidth ?? 1080,
+      recommendedKTPSectionWidth: options?.recommendedKTPSectionWidth ?? 640,
     }
   }
 
@@ -100,14 +91,14 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
     const rect = await this.locateViewAreaTop();
     this.canvas.crop(rect, rect.angle);
     await this.debugImage();
-    const bottomY = await this.locateViewAreaBottom();
-    this.canvas.crop({
-      left: 0,
-      width: this.canvas.width,
-      top: 0,
-      height: bottomY,
-    });
-    await this.debugImage();
+    // const bottomY = await this.locateViewAreaBottom();
+    // this.canvas.crop({
+    //   left: 0,
+    //   width: this.canvas.width,
+    //   top: 0,
+    //   height: bottomY,
+    // });
+    // await this.debugImage();
 
 
     return async () => {
@@ -127,29 +118,28 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
     const scheduler = await this.multiplexor.getScheduler(SchedulerKeys.default);
     const numberScheduler = await this.multiplexor.getScheduler(SchedulerKeys.number);
     const imgUrl = canvas.toDataURL();
+    canvas.toWidth(this.options.recommendedKTPSectionWidth);
     // Splitting the image up into three sections makes the OCR output gibberish. I have no idea why.
     // Just scan the entirety of the image.
     const [result, nikResult] = await Promise.all([
       // Segmenting this with rectangle makes the output worse in quality
       scheduler.addJob("recognize", imgUrl),
-      numberScheduler.addJob("recognize", imgUrl, {
-        rectangle: canvas.getCanvasRectFromRelativeRect({
-          x0: 0,
-          x1: 0.8,
-          y0: 0.5,
-          y1: 1,
-        })
-      })
+      numberScheduler.addJob("recognize", imgUrl)
     ]);
     await this.debugImage(imgUrl);
 
-    const relevantLines = result.data.lines.slice(Math.max(0, result.data.lines.length - 3));
+    let findProvince = correctStartsWith(["provinsi"]);
+    let provinceIndex = result.data.lines.findIndex((value) => findProvince(value.text) !== null);
+    if (provinceIndex === -1) {
+      provinceIndex = Math.max(0, result.data.lines.length - 3);
+    }
+    const relevantLines = result.data.lines.slice(provinceIndex);
     const provinceLine = relevantLines[0];
     const regencyCityLine = relevantLines[1];
     const nikLine = nikResult.data.lines[nikResult.data.lines.length - 1];
+    console.log(result.data, nikResult.data);
 
     const regencyParsed = regencyCityLine ? this.processLine(this.targets.regency, regencyCityLine) : null;
-    const nikString = nikLine && this.gatherPartsOfNIK(nikLine)?.text;
 
     return {
       province: provinceLine ? this.processLine(this.targets.province, provinceLine) : null,
@@ -157,49 +147,43 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
       // If we managed to parse regency, then city is null; otherwise try to parse city.
       // Parsing is successful if the text starts with KABUPATEN or CITY
       city: regencyCityLine && !regencyParsed ? this.processLine(this.targets.city, regencyCityLine) : null,
-      NIK: nikString ? this.processLine(this.targets.NIK, nikString) : null,
+      NIK: nikLine ? this.processLine(this.targets.NIK, nikLine) : null,
     };
   }
 
-
-  private async locateViewAreaBottom(): Promise<number> {
-    const scheduler = await this.multiplexor.getScheduler(SchedulerKeys.default);
-    const result = await scheduler.addJob("recognize", this.canvas.toDataURL(), {
-      rectangle: this.canvas.getCanvasRectFromRelativeRect({
-        x0: 0,
-        x1: 1,
-        y0: 0.6,
-        y1: 1,
-      }),
-    });
-    const lastLine = result.data.lines[result.data.lines.length - 1];
-    if (!lastLine) {
-      throw new Error("Cannot find bottom-left corner of the passport");
-    }
-    return lastLine.bbox.y1;
-  }
-
-  private isPartOfNIK(word: Word) {
-    const isMostlyDigits = countDigits(word.text) >= word.text.length * 2 / 3;
-    const hasSignificance = word.text.length > 3;
-    return isMostlyDigits && hasSignificance;
-  }
-  private gatherPartsOfNIK(line: Line): {
+  private getNIKBoundingBox(line: Line): {
     text: string;
     bbox: Bbox;
   } | null {
-    const startIdx = line.words.findIndex(this.isPartOfNIK);
-    if (startIdx === -1) {
+    const startIdx = line.words.findIndex(word => distance(word.text.trim(), "NIK") <= 1);
+    if (startIdx === -1 || startIdx === line.words.length - 1) {
       return null;
     }
-    let text = line.words[startIdx].text;
-    let bbox = { ...line.words[startIdx].bbox };
+
+    let text = line.words[startIdx + 1].text.trim();
+    let bbox = { ...line.words[startIdx + 1].bbox };
+
+    let maxSymbolDistance = 0;
+    const exampleSymbols = line.words[startIdx].symbols;
+    let prevSymbolX1 = exampleSymbols[0].bbox.x1;
+    for (let i = 1; i < exampleSymbols.length; i++) {
+      const symbol = exampleSymbols[i];
+      maxSymbolDistance = Math.max(symbol.bbox.x0 - prevSymbolX1, maxSymbolDistance);
+      prevSymbolX1 = symbol.bbox.x1;
+    }
+
+    const maxWordDistance = maxSymbolDistance * 6;
+    let prevWordX1 = line.words[startIdx + 1].bbox.x1;
     for (let i = startIdx + 1; i < line.words.length; i++) {
       const word = line.words[i];
-      if (!this.isPartOfNIK(word)) break;
+      const wordDistance = word.bbox.x0 - prevWordX1;
+      if (maxWordDistance < wordDistance) {
+        break;
+      }
       bbox.y0 = Math.min(bbox.y0, word.bbox.y0);
       bbox.y1 = Math.max(bbox.y1, word.bbox.y1);
-      bbox.x1 = Math.max(bbox.x1, word.bbox.x1);
+      bbox.x1 = word.bbox.x1;
+      prevWordX1 = word.bbox.x1;
       text += word.text;
     }
     return {
@@ -214,9 +198,7 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
 
     let provinsiWord: Bbox | undefined, surroundingWord: Bbox | undefined, nikWord: Bbox | undefined;
     for (const line of result.data.lines) {
-      if (countDigits(line.text) >= 10) {
-        nikWord = this.gatherPartsOfNIK(line)?.bbox;
-      }
+      nikWord = this.getNIKBoundingBox(line)?.bbox;
 
       for (let i = 0; i < line.words.length; i++) {
         const word = line.words[i];
@@ -256,7 +238,7 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
       left: x0,
       top: y0,
       width: nikWidth * 1.1,
-      height: nikWidth * 1.3,
+      height: nikWidth * 0.85,
       angle,
       wordWidth: nikWidth,
       wordHeight: nikWord.y1 - nikWord.y0,
@@ -266,6 +248,7 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
   async run(): Promise<OCRResult<typeof KTPCardOCRTargets>> {
     this.canvas.toWidth(this.options.recommendedWidth);
     const recognizeKTPTopInfo = await this.locateViewArea();
+    this.canvas.toWidth(this.options.recommendedKTPSectionWidth);
     const scheduler = await this.multiplexor.getScheduler(SchedulerKeys.default);
 
     const payload: KTPCardOCRResult = {} as any;
@@ -282,17 +265,22 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
     }
 
     let placeOfBirth = trimWhitespace(result.data.lines[1].text);
-    const dateOfBirthMatch = placeOfBirth.match(KTP_DATE_REGEX);
+    let dateOfBirthMatch = placeOfBirth.match(KTP_DATE_REGEX);
     if (dateOfBirthMatch) {
-      payload.dateOfBirth = dateOfBirthMatch ? this.processLine(this.targets.dateOfBirth, dateOfBirthMatch[0]) : null;
       placeOfBirth = placeOfBirth.slice(0, dateOfBirthMatch.index);
+    } else {
+      dateOfBirthMatch = trimWhitespace(result.data.lines[2].text).match(KTP_DATE_REGEX);
+      if (dateOfBirthMatch) {
+        result.data.lines.splice(2, 1);
+      }
     }
+    payload.dateOfBirth = dateOfBirthMatch ? this.processLine(this.targets.dateOfBirth, dateOfBirthMatch[0]) : null;
     payload.placeOfBirth = dateOfBirthMatch ? this.processLine(this.targets.placeOfBirth, placeOfBirth) : null;
 
-    let sex = trimWhitespace(result.data.lines[2].text);
-    const wordsInSexRow = sex.split(' ');
+    const sexRow = trimWhitespace(result.data.lines[2].text);
+    const wordsInSexRow = sexRow.split(' ');
     const bloodType = wordsInSexRow[wordsInSexRow.length - 1];
-    payload.sex = wordsInSexRow[0] ? this.processLine(this.targets.sex, sex[0]) : wordsInSexRow[0];
+    payload.sex = wordsInSexRow[0] ? this.processLine(this.targets.sex, wordsInSexRow[0]) : null;
     payload.bloodType = bloodType ? this.processLine(this.targets.bloodType, bloodType) : null;
 
     const indicesToTargetMap: Record<number, KTPCardOCRTarget> = {};
@@ -309,6 +297,8 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
       if (!target) continue;
       payload[target.key as keyof KTPCardOCRResult] = line ? this.processLine(target, line) : null;
     }
+
+    console.log(result.data);
 
     return payload;
   }
