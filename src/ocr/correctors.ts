@@ -13,18 +13,23 @@ export function correctByHistory(text: string, history: string[] | undefined) {
   return text;
 }
 
-export function correctAlphabet(options?: {
+export function correctAlphanumeric(options?: {
   withHistory?: boolean;
   maxLength?: number;
   whitelist?: string;
+  numbers?: boolean;
+  alphabet?: boolean;
 }) {
   const withHistory = options?.withHistory ?? true;
   const whitelist = options?.whitelist ?? '';
+  const withNumbers = options?.numbers ?? true;
+  const withAlphabet = options?.alphabet ?? true;
   return (value: string, history?: string[]) => {
     let text = Array.from(trimWhitespace(value.toUpperCase())).filter(chr => {
       const ascii = chr.charCodeAt(0);
-      const isUppercaseAlpha = 65 <= ascii && ascii <= 65 + 26;
-      return isUppercaseAlpha || whitelist.includes(chr)
+      const isUppercaseAlpha = withAlphabet && 65 <= ascii && ascii <= 65 + 26;
+      const isNumber = withNumbers && 48 <= ascii && ascii <= 48 + 9;
+      return isUppercaseAlpha || isNumber || whitelist.includes(chr)
     }).join('').trim();
     if (options?.maxLength !== undefined) {
       text = text.substring(0, options.maxLength);
@@ -34,6 +39,18 @@ export function correctAlphabet(options?: {
     }
     return withHistory ? correctByHistory(text, history) : text;
   }
+}
+
+export function correctAlphabet(options?: {
+  withHistory?: boolean;
+  maxLength?: number;
+  whitelist?: string;
+}) {
+  return correctAlphanumeric({
+    ...options,
+    alphabet: true,
+    numbers: false,
+  });
 }
 
 export function correctEnums(possibleEnums: string[], options?: {

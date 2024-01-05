@@ -1,4 +1,4 @@
-import { type Scheduler, type Word, type Line, type Rectangle } from "tesseract.js";
+import { type Scheduler, type Word, type Line, type Rectangle, PSM } from "tesseract.js";
 import { distance } from 'fastest-levenshtein';
 import { PassportOCRPreprocessMessageInput, PassportOCRPreprocessMessageOutput } from "./preprocess.worker";
 import OCR, { OCROptions, OCRResult, OCRTargetReadResult } from "../ocr";
@@ -26,8 +26,13 @@ interface PassportOCROptions extends OCROptions<typeof PassportOCRTargets> {
 }
 
 enum SchedulerKeys {
-  number = "number",
+  // number = "number",
   default = "default",
+  fast = "fast",
+}
+enum PreprocessKeys {
+  locator = "locator",
+  preprocess = "preprocess",
 }
 
 /** Helper class to perform OCR for passports.
@@ -38,23 +43,25 @@ enum SchedulerKeys {
 export default class PassportOCR extends OCR<typeof PassportOCRTargets, SchedulerKeys> {
   targets = PassportOCRTargets;
   options: PassportOCROptions;
+  workers: Record<PreprocessKeys, Worker>;
   constructor(options?: Partial<PassportOCROptions>) {
     super({
       ...options,
       multiplexorConfig: {
-        [SchedulerKeys.number]: {
-          count: 2,
-          initOptions: {
-            load_freq_dawg: '0',
-            load_number_dawg: '0',
-            load_system_dawg: '0',
-          },
-          params: {
-            tessedit_char_whitelist: '0123456789'
-          }
-        },
-        [SchedulerKeys.default]: {
-          count: 4,
+        // [SchedulerKeys.number]: {
+        //   count: 2,
+        //   initOptions: {
+        //     load_freq_dawg: '0',
+        //     load_number_dawg: '0',
+        //     load_system_dawg: '0',
+        //   },
+        //   params: {
+        //     tessedit_char_whitelist: '0123456789'
+        //   }
+        // },
+        [SchedulerKeys.fast]: {
+          count: 3,
+          fast: true,
           initOptions: {
             load_freq_dawg: '0',
             load_number_dawg: '0',
@@ -62,6 +69,17 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets, Schedule
           },
           params: {
             tessedit_char_blacklist: `,."'“:`
+          }
+        },
+        [SchedulerKeys.default]: {
+          count: 3,
+          initOptions: {
+            load_freq_dawg: '0',
+            load_number_dawg: '0',
+            load_system_dawg: '0',
+          },
+          params: {
+            tessedit_char_blacklist: `,."'“:`,
           }
         }
       }
@@ -74,6 +92,10 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets, Schedule
       recommendedFullWidth: options?.recommendedFullWidth ?? 1440,
       recommendedPassportNumberImageWidth: options?.recommendedPassportNumberImageWidth ?? 320,
     };
+    this.workers = {
+      [PreprocessKeys.locator]: new Worker(new URL("./locator.worker.ts", import.meta.url), { type: 'module' }),
+      [PreprocessKeys.preprocess]: new Worker(new URL("./preprocess.worker.ts", import.meta.url), { type: 'module' })
+    }
   }
 
   /** Helper method for finding words in a line. The words don't have to exactly match, as long as they are close enough. */
@@ -97,7 +119,7 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets, Schedule
 
   /** Locate the section of the image which contain the relevant information. This function will mutate the canvas. */
   private async locateViewArea() {
-    const scheduler = await this.multiplexor.getScheduler(SchedulerKeys.default);
+    const scheduler = await this.multiplexor.getScheduler(SchedulerKeys.fast);
     const ctx = this.canvas.context;
     const oldImageData = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
     const p0 = await this.locateViewAreaTop(scheduler, ctx);
@@ -148,7 +170,7 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets, Schedule
   private async locateViewAreaTop(scheduler: Scheduler, ctx: CanvasRenderingContext2D) {
     const imageData = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
     // This is tested using Vite and should also work with Webpack 5. If it doesn't, perhaps find a web worker module loader? 
-    const worker = new Worker(new URL("./locator.worker.ts", import.meta.url), { type: 'module' });
+    const worker = this.workers[PreprocessKeys.locator];
     const procImage = await runWorker<PassportOCRPreprocessMessageInput, PassportOCRPreprocessMessageOutput>(worker, {
       width: imageData.width,
       height: imageData.height,
@@ -263,7 +285,7 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets, Schedule
   private async locateViewAreaBottom(scheduler: Scheduler, ctx: CanvasRenderingContext2D) {
     const imageData = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
     // Run the preprocessing step. This will mutate the canvas for the rest of the OCR step. Keep that in mind if bugs happen.
-    const preprocessWorker = new Worker(new URL("./preprocess.worker.ts", import.meta.url), { type: 'module' });
+    const preprocessWorker = this.workers[PreprocessKeys.preprocess];
     const procImage = await runWorker<PassportOCRPreprocessMessageInput, PassportOCRPreprocessMessageOutput>(preprocessWorker, {
       width: imageData.width,
       height: imageData.height,
@@ -337,7 +359,7 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets, Schedule
     await this.debugImage(canvas.toDataURL());
 
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const preprocessWorker = new Worker(new URL("./preprocess.worker.ts", import.meta.url), { type: 'module' });
+    const preprocessWorker = this.workers[PreprocessKeys.preprocess];
     const procImage = await runWorker<PassportOCRPreprocessMessageInput, PassportOCRPreprocessMessageOutput>(preprocessWorker, {
       width: imageData.width,
       height: imageData.height,
@@ -394,9 +416,10 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets, Schedule
     return sections;
   }
 
+  /** @deprecated Disabled for now in order to reduce number of OCR tasks and web workers */
   private async readDateTarget(scheduler: Scheduler, target: PassportOCRTarget, imgUrl: string): Promise<OCRTargetReadResult | null> {
     const sections = this.getDateTargetRectangles(target);
-    const numberScheduler = await this.multiplexor.getScheduler(SchedulerKeys.number);
+    const numberScheduler = await this.multiplexor.getScheduler(SchedulerKeys.default);
     const [day, month, year] = (await Promise.all([
       numberScheduler.addJob("recognize", imgUrl, {
         rectangle: sections[0],
@@ -432,17 +455,26 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets, Schedule
         rectangle
       }),
       // Also perform a redundant check by splitting the date into three for potentially better recognition
-      target.isDate ? this.readDateTarget(scheduler, target, imgUrl) : null
+      // 01/05/2023: Disabled to decrease the number of OCR tasks and web workers. Turn back on if you need better accuracy.
+      // target.isDate ? this.readDateTarget(scheduler, target, imgUrl) : null
+      Promise.resolve(),
     ]);
     // Greedily grab the first line and hope for the best.
     const line = result.data.lines[0];
     const processedLine = line ? this.processLine(target, line) : null;
 
     // Compare the confidence of the alternative result with this result.
-    if (altResult && altResult.confidence > line.confidence) {
-      return altResult;
-    }
+    // if (altResult && altResult.confidence > line.confidence) {
+    //   return altResult;
+    // }
     return processedLine ? { text: processedLine, confidence: line.confidence } : null;
+  }
+
+  async terminate() {
+    super.terminate();
+    for (let key of Object.keys(this.workers)) {
+      this.workers[key as PreprocessKeys].terminate();
+    }
   }
 
   /** Performs OCR */

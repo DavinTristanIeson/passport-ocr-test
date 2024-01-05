@@ -1,6 +1,6 @@
 import { distance } from "fastest-levenshtein";
 import { OCRTarget } from "../ocr";
-import { anyCorrectors, correctAlphabet, correctByHistory, correctEnums, mergeCorrectors } from "../ocr/correctors";
+import { anyCorrectors, correctAlphabet, correctAlphanumeric, correctByHistory, correctEnums, mergeCorrectors } from "../ocr/correctors";
 import { correctStartsWith } from "../ocr/correctors";
 import { trimWhitespace } from "../ocr/utils";
 
@@ -22,8 +22,11 @@ export const KTP_DATE_REGEX = /([0-9]{2})[^a-zA-Z0-9]*([0-9]{2})[^a-zA-Z0-9]*([0
 
 // Single isolated characters at the front of the string should be ignored as that's probably part of the colon/label
 export function correctStrayCharacter(value: string) {
-  const split = value.split(':', 2);
-  value = split.length === 1 ? value : split[1].trim();
+  const split = value.trim().split(':', 2);
+  if (split.length > 1) {
+    // ...OCR might hallucinate a colon near the end.
+    value = (split[0].length > split[1].length ? split[0] : split[1]).trim();
+  }
   const textSections = value.split(/\s+/);
   while (textSections.length > 0 && textSections[0].length <= 1) {
     textSections.shift();
@@ -50,7 +53,8 @@ function correctDate(date: string) {
 }
 
 function correctRTRW(rtRw: string) {
-  const match = rtRw.match(/([0-9]{3})[^a-zA-Z0-9]*([0-9]{3})/);
+  // RT or RW might not exist and be replaced with hyphen.
+  const match = rtRw.match(/([0-9]{3}|-)[^a-zA-Z0-9]*([0-9]{3}|-)/);
   if (!match) {
     return null;
   }
@@ -125,7 +129,13 @@ const KTPCardOCRTargets = {
       }),
       anyCorrectors([
         correctStartsWith("KABUPATEN"),
-        correctJakartaTerritory,
+        // https://id.wikipedia.org/wiki/Daftar_kabupaten_dan_kota_administrasi_di_Daerah_Khusus_Ibukota_Jakarta
+        // KEPULAUAN SERIBU
+        correctEnums(["KEPULAUAN SERIBU"], {
+          spaceInsensitive: true,
+          exact: true,
+          history: false,
+        }),
       ]),
       correctByHistory,
     ])
@@ -139,7 +149,12 @@ const KTPCardOCRTargets = {
         withHistory: false,
         whitelist: ' ',
       }),
-      correctStartsWith("KOTA"),
+      anyCorrectors([
+        correctStartsWith("KOTA"),
+        // https://id.wikipedia.org/wiki/Daftar_kabupaten_dan_kota_administrasi_di_Daerah_Khusus_Ibukota_Jakarta
+        // Semua daerah Jakarta kecuali Kepulauan Seribu
+        correctJakartaTerritory,
+      ]),
       correctByHistory,
     ])
   } as KTPCardOCRTarget,
@@ -196,9 +211,9 @@ const KTPCardOCRTargets = {
     hasHistory: false,
     corrector: mergeCorrectors([
       correctStrayCharacter,
-      correctAlphabet({
+      correctAlphanumeric({
         withHistory: true,
-        whitelist: ' ',
+        whitelist: ' /.',
       }),
     ])
   } as KTPCardOCRTarget,

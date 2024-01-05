@@ -24,6 +24,7 @@ enum SchedulerKeys {
 export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerKeys> {
   options: KTPCardOCROptions;
   targets = KTPCardOCRTargets;
+  preprocessWorker: Worker;
   constructor(options: Partial<KTPCardOCROptions>) {
     super({
       ...options,
@@ -59,6 +60,7 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
             load_number_dawg: '0',
             load_system_dawg: '0',
           },
+          fast: true,
           params: {
             tessedit_do_invert: '0',
           }
@@ -72,13 +74,14 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
       recommendedWidth: options?.recommendedWidth ?? 1080,
       recommendedKTPSectionWidth: options?.recommendedKTPSectionWidth ?? 640,
     }
+    this.preprocessWorker = new Worker(new URL("./preprocess.worker.ts", import.meta.url));
   }
 
   /** Locates the relevant passport section in the image */
   private async locateViewArea() {
     // Erase colors except black/dark ones.
-    const worker = new Worker(new URL("./preprocess.worker.ts", import.meta.url));
     const ctx = this.canvas.context;
+    const worker = this.preprocessWorker;
     const imageData = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height)
     const procImage = await runWorker<KTPCardOCRPreprocessMessageInput, KTPCardOCRPreprocessMessageOutput>(worker, {
       data: imageData.data,
@@ -264,6 +267,11 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
       wordWidth: nikWidth,
       wordHeight: nikWord.y1 - nikWord.y0,
     }
+  }
+
+  async terminate(): Promise<void> {
+    super.terminate();
+    this.preprocessWorker.terminate();
   }
 
   async run(): Promise<OCRResult<typeof KTPCardOCRTargets>> {

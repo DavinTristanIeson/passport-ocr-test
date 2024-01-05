@@ -14,9 +14,9 @@ const ocrHistoryTable = document.querySelector<HTMLTableElement>("#ocr_history")
 const temporaryCanvas = document.createElement("canvas");
 
 
-const history: KTPCardOCRHistory = {};
+const history: PassportOCRHistory = {};
 
-const OCR = new KTPCardOCR({
+const OCR = new PassportOCR({
   // onProcessImage: (objectUrl) => {
   //   const processedImage = document.createElement("img");
   //   processedImage.src = objectUrl;
