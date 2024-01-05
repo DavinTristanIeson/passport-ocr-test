@@ -2,6 +2,7 @@ import { distance } from "fastest-levenshtein";
 import { OCRTarget } from "../ocr";
 import { anyCorrectors, correctAlphabet, correctByHistory, correctEnums, mergeCorrectors } from "../ocr/correctors";
 import { correctStartsWith } from "../ocr/correctors";
+import { trimWhitespace } from "../ocr/utils";
 
 export type KTPCardOCRTarget = OCRTarget & {
   index: number | null;
@@ -18,6 +19,18 @@ function correctBloodType(bloodType: string) {
 }
 
 export const KTP_DATE_REGEX = /([0-9]{2})[^a-zA-Z0-9]*([0-9]{2})[^a-zA-Z0-9]*([0-9]{4})/;
+
+// Single isolated characters at the front of the string should be ignored as that's probably part of the colon/label
+export function correctStrayCharacter(value: string) {
+  const split = value.split(':', 2);
+  value = split.length === 1 ? value : split[1].trim();
+  const textSections = value.split(/\s+/);
+  while (textSections.length > 0 && textSections[0].length <= 1) {
+    textSections.shift();
+  }
+  return textSections.length === 0 ? null : textSections.join(' ');
+}
+
 function correctDate(date: string) {
   const match = date.match(KTP_DATE_REGEX);
   if (!match) {
@@ -71,6 +84,13 @@ function correctNIK(value: string) {
     return 48 <= ascii && ascii <= 48 + 9;
   }).join('');
   return (corrected.length === 0 ? null : corrected);
+}
+
+function correctNationality(value: string, history: string[]) {
+  if (value.includes("WNI") || distance(value, "WNI") <= 1) {
+    return "WNI";
+  }
+  return correctByHistory(value, history);
 }
 
 const KTPCardOCRTargets = {
@@ -133,19 +153,25 @@ const KTPCardOCRTargets = {
     key: "name",
     index: 0,
     hasHistory: false,
-    corrector: correctAlphabet({
-      withHistory: true,
-      whitelist: ' ',
-    })
+    corrector: mergeCorrectors([
+      correctStrayCharacter,
+      correctAlphabet({
+        withHistory: true,
+        whitelist: ' ',
+      }),
+    ])
   } as KTPCardOCRTarget,
   placeOfBirth: {
     key: "placeOfBirth",
     index: null,
     hasHistory: true,
-    corrector: correctAlphabet({
-      withHistory: true,
-      whitelist: ' ',
-    }),
+    corrector: mergeCorrectors([
+      correctStrayCharacter,
+      correctAlphabet({
+        withHistory: true,
+        whitelist: ' ',
+      }),
+    ]),
   } as KTPCardOCRTarget,
   dateOfBirth: {
     key: "dateOfBirth",
@@ -168,10 +194,13 @@ const KTPCardOCRTargets = {
     key: "address",
     index: 3,
     hasHistory: false,
-    corrector: correctAlphabet({
-      withHistory: false,
-      whitelist: ' -',
-    })
+    corrector: mergeCorrectors([
+      correctStrayCharacter,
+      correctAlphabet({
+        withHistory: true,
+        whitelist: ' ',
+      }),
+    ])
   } as KTPCardOCRTarget,
   "RT/RW": {
     key: "RT/RW",
@@ -183,19 +212,25 @@ const KTPCardOCRTargets = {
     key: "village",
     index: 5,
     hasHistory: true,
-    corrector: correctAlphabet({
-      withHistory: true,
-      whitelist: ' ',
-    })
+    corrector: mergeCorrectors([
+      correctStrayCharacter,
+      correctAlphabet({
+        withHistory: true,
+        whitelist: ' ',
+      }),
+    ])
   } as KTPCardOCRTarget,
   district: {
     key: "district",
     index: 6,
     hasHistory: true,
-    corrector: correctAlphabet({
-      withHistory: true,
-      whitelist: ' ',
-    })
+    corrector: mergeCorrectors([
+      correctStrayCharacter,
+      correctAlphabet({
+        withHistory: true,
+        whitelist: ' ',
+      }),
+    ])
   } as KTPCardOCRTarget,
   religion: {
     key: "religion",
@@ -213,6 +248,7 @@ const KTPCardOCRTargets = {
       ], {
         history: true,
         exact: true,
+        spaceInsensitive: true,
       })
     ])
   } as KTPCardOCRTarget,
@@ -221,6 +257,7 @@ const KTPCardOCRTargets = {
     index: 8,
     hasHistory: true,
     corrector: mergeCorrectors([
+      correctStrayCharacter,
       correctAlphabet({
         withHistory: false,
         whitelist: ' ',
@@ -233,6 +270,7 @@ const KTPCardOCRTargets = {
       ], {
         history: true,
         exact: true,
+        spaceInsensitive: true,
       }),
     ]),
   } as KTPCardOCRTarget,
@@ -240,35 +278,39 @@ const KTPCardOCRTargets = {
     key: "occupation",
     index: 9,
     hasHistory: true,
-    corrector: correctAlphabet({
-      withHistory: true,
-      whitelist: ' /',
-    })
+    corrector: mergeCorrectors([
+      correctStrayCharacter,
+      correctAlphabet({
+        withHistory: true,
+        whitelist: ' ',
+      }),
+    ])
   } as KTPCardOCRTarget,
   citizenship: {
     key: "citizenship",
     index: 10,
     hasHistory: true,
     corrector: mergeCorrectors([
+      correctStrayCharacter,
       correctAlphabet({
         withHistory: false,
       }),
-      correctEnums(["WNI"], {
-        exact: false,
-        history: true,
-      })
+      correctNationality,
     ])
   } as KTPCardOCRTarget,
   validUntil: {
     key: "validUntil",
     index: 11,
     hasHistory: false,
-    corrector: anyCorrectors([
-      correctDate,
-      correctEnums(["SEUMUR HIDUP"], {
-        exact: true,
-        history: false,
-      })
+    corrector: mergeCorrectors([
+      correctStrayCharacter,
+      anyCorrectors([
+        correctDate,
+        correctEnums(["SEUMUR HIDUP"], {
+          exact: true,
+          history: false,
+        })
+      ])
     ]),
   } as KTPCardOCRTarget,
 }

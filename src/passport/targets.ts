@@ -15,8 +15,9 @@ const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', '
 
 /** Corrects passport dates. Day and year must be numbers, but there's a loose word comparison for the month part. */
 function correctPassportDate(value: string): string | null {
+  value = value.split(/\s+/).join('');
   // Sometimes, letters in the month part are interpreted as digits (O <=> 0) so we cannot simply use \w.
-  const match = value.match(/([0-9]{1,2})\s*([\d\w]{3})\s*([0-9]{4})/);
+  const match = value.match(/([0-9]{1,2})([\d\w]{3})([0-9]{4})/);
   if (!match) return null;
   const day = parseInt(match[1]);
   const rawMonth = match[2].toUpperCase();

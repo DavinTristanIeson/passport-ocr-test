@@ -47,7 +47,8 @@ export default class OCRCanvas {
   }
 
   toDataURL() {
-    return this.canvas.toDataURL();
+    // Converting to jpeg seems to be faster than png, but not that significant.
+    return this.canvas.toDataURL("image/jpeg");
   }
 
   rotate(pivot: CanvasPivot) {

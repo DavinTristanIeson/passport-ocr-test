@@ -17,13 +17,13 @@ const temporaryCanvas = document.createElement("canvas");
 const history: KTPCardOCRHistory = {};
 
 const OCR = new KTPCardOCR({
-  onProcessImage: (objectUrl) => {
-    const processedImage = document.createElement("img");
-    processedImage.src = objectUrl;
-    processedImage.alt = "Canvas";
-    ocrProcessedImageContainer.innerHTML = '';
-    ocrProcessedImageContainer.appendChild(processedImage);
-  },
+  // onProcessImage: (objectUrl) => {
+  //   const processedImage = document.createElement("img");
+  //   processedImage.src = objectUrl;
+  //   processedImage.alt = "Canvas";
+  //   ocrProcessedImageContainer.innerHTML = '';
+  //   ocrProcessedImageContainer.appendChild(processedImage);
+  // },
   history,
 });
 
@@ -58,6 +58,7 @@ ocrExecuteButton.addEventListener("click", async () => {
     return;
   }
   ocrExecuteButton.disabled = true;
+  console.time();
   try {
     const file = ocrFileInput.files![0];
     await OCR.mountFile(file);
@@ -72,6 +73,7 @@ ocrExecuteButton.addEventListener("click", async () => {
   } finally {
     ocrExecuteButton.disabled = false;
   }
+  console.timeEnd();
 });
 
 ocrCorrectResultButton.addEventListener("click", () => {

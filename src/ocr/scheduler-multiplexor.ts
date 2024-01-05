@@ -5,6 +5,8 @@ import { type Scheduler, type InitOptions, createScheduler, createWorker, Worker
 interface WorkerConfig {
   /** Number of workers to create for a scheduler. */
   count: number;
+  /** Prefer speed to accuracy */
+  fast?: boolean;
   /** Options passed to ``createWorker`` during the initialization of a worker */
   initOptions?: Partial<InitOptions>;
   /** Additional parameters set after worker initialization */
@@ -34,13 +36,19 @@ export default class SchedulerMultiplexor<TKeys extends string = string> {
     const scheduler = await createScheduler();
     this.schedulers[key] = scheduler;
 
-    for (let i = 0; i < config.count; i++) {
-      const worker = await createWorker("ind", undefined, undefined, config.initOptions);
+    const langPath = config.fast ? "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main" : undefined;
+    await Promise.all(Array.from({ length: config.count }, async (_, i) => {
+      const worker = await createWorker("ind", undefined, {
+        langPath,
+        cachePath: config.fast ? 'fast' : 'regular',
+        gzip: !config.fast,
+      }, config.initOptions);
       if (config.params) {
         await worker.setParameters(config.params);
       }
       scheduler.addWorker(worker);
-    }
+    }));
+
     return scheduler;
   }
   /** Terminates all existing schedulers */

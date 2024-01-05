@@ -1,6 +1,6 @@
-import { Bbox, Line, Word } from "tesseract.js";
+import { Bbox, Line, PSM, Word } from "tesseract.js";
 import OCR, { OCRHistory, OCROptions, OCRResult } from "../ocr";
-import KTPCardOCRTargets, { KTPCardOCRTarget, KTP_DATE_REGEX } from "./targets";
+import KTPCardOCRTargets, { KTPCardOCRTarget, KTP_DATE_REGEX, correctStrayCharacter } from "./targets";
 import { copyImageData, runWorker, trimWhitespace } from "../ocr/utils";
 import { KTPCardOCRPreprocessMessageInput, KTPCardOCRPreprocessMessageOutput } from "./preprocess.worker";
 import { distance } from "fastest-levenshtein";
@@ -18,6 +18,7 @@ enum SchedulerKeys {
   number = "number",
   // alphabet = "alphabet",
   default = "default",
+  fast = "fast",
 }
 
 export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerKeys> {
@@ -35,32 +36,31 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
             load_system_dawg: '0',
           },
           params: {
-            tessedit_char_whitelist: '0123456789'
+            tessedit_char_whitelist: '0123456789',
+            tessedit_do_invert: '0',
           }
         },
-        // [SchedulerKeys.alphabet]: {
-        //   count: 1,
-        //   initOptions: {
-        //     load_freq_dawg: '0',
-        //     load_number_dawg: '0',
-        //     load_system_dawg: '0',
-        //   },
-        //   params: {
-        //     tessedit_char_whitelist: Array.from({ length: 26 }, (_, i) => String.fromCharCode(i + 65)).concat(
-        //       ' ',
-        //       Array.from({ length: 26 }, (_, i) => String.fromCharCode(i + 97)),
-        //     ).join(''),
-        //   }
-        // },
+        [SchedulerKeys.fast]: {
+          count: 1,
+          initOptions: {
+            load_freq_dawg: '0',
+            load_number_dawg: '0',
+            load_system_dawg: '0',
+          },
+          fast: true,
+          params: {
+            tessedit_do_invert: '0',
+          }
+        },
         [SchedulerKeys.default]: {
           count: 2,
           initOptions: {
-            load_freq_dawg: '1',
+            load_freq_dawg: '0',
             load_number_dawg: '0',
             load_system_dawg: '0',
           },
           params: {
-            tessedit_char_blacklist: `,."'“:`
+            tessedit_do_invert: '0',
           }
         }
       }
@@ -206,11 +206,14 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
   }
 
   private async locateViewAreaTop() {
-    const scheduler = await this.multiplexor.getScheduler(SchedulerKeys.default);
+    const scheduler = await this.multiplexor.getScheduler(SchedulerKeys.fast);
 
     const result = await scheduler.addJob("recognize", this.canvas.toDataURL());
 
+    console.log(result.data);
+
     let provinsiWord: Bbox | undefined, surroundingWord: Bbox | undefined, nikWord: Bbox | undefined;
+
     /* Using TaskPool like in passport will not help much since the output becomes gibberish for some reason.
     Besides, due to how I performed OCR in this case, we don't need many workers (can't even parallelize it due to the gibberish output, no idea why).
     So, splitting it into many sections will just result in worse quality and time (since not much can be parallelized unless you want to add web worker overhead) */
@@ -233,15 +236,15 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
     if (!nikWord) {
       throw new Error("Cannot find top-left corner of KTP");
     }
-    this.canvas.markBoxes([
-      {
-        left: nikWord.x0,
-        top: nikWord.y0,
-        width: nikWord.x1 - nikWord.x0,
-        height: nikWord.y1 - nikWord.y0,
-      }
-    ]);
-    await this.debugImage();
+    // this.canvas.markBoxes([
+    //   {
+    //     left: nikWord.x0,
+    //     top: nikWord.y0,
+    //     width: nikWord.x1 - nikWord.x0,
+    //     height: nikWord.y1 - nikWord.y0,
+    //   }
+    // ]);
+    // await this.debugImage();
     const nikWidth = nikWord.x1 - nikWord.x0;
     const nikHeight = nikWord.y1 - nikWord.y0;
     const x0 = nikWord.x0;
@@ -256,7 +259,7 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
       left: x0,
       top: y0,
       width: nikWidth * 1.1,
-      height: nikWidth * 0.85,
+      height: nikWidth * 1.1,
       angle,
       wordWidth: nikWidth,
       wordHeight: nikWord.y1 - nikWord.y0,
@@ -284,28 +287,36 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
       payload[key as keyof KTPCardOCRResult] = ktpTop[key as keyof typeof ktpTop];
     }
 
-    // Usually, place of birth and date of birth is located side-by-side
-    let placeOfBirth = trimWhitespace(result.data.lines[1].text);
-    let dateOfBirthMatch = placeOfBirth.match(KTP_DATE_REGEX);
-    if (dateOfBirthMatch) {
-      placeOfBirth = placeOfBirth.slice(0, dateOfBirthMatch.index);
-    } else {
-      // But, place of birth and date of birth can be in different lines if place of birth is too long, so we need an extra check
-      dateOfBirthMatch = trimWhitespace(result.data.lines[2].text).match(KTP_DATE_REGEX);
+    // Get place of birth, eliminate stray characters from the label
+    let placeOfBirth = correctStrayCharacter(result.data.lines[1].text);
+    if (placeOfBirth) {
+      let dateOfBirthMatch = placeOfBirth.match(KTP_DATE_REGEX);
       if (dateOfBirthMatch) {
-        result.data.lines.splice(2, 1);
+        // Usually, place of birth and date of birth is located side-by-side
+        placeOfBirth = placeOfBirth.slice(0, dateOfBirthMatch.index);
+      } else {
+        // But, place of birth and date of birth can be in different lines if place of birth is too long, so we need an extra check
+        dateOfBirthMatch = trimWhitespace(result.data.lines[2].text).match(KTP_DATE_REGEX);
+        if (dateOfBirthMatch) {
+          result.data.lines.splice(2, 1);
+        }
+      }
+
+      if (dateOfBirthMatch) {
+        payload.dateOfBirth = this.processLine(this.targets.dateOfBirth, dateOfBirthMatch[0]);
+        payload.placeOfBirth = this.processLine(this.targets.placeOfBirth, placeOfBirth);
       }
     }
-    payload.dateOfBirth = dateOfBirthMatch ? this.processLine(this.targets.dateOfBirth, dateOfBirthMatch[0]) : null;
-    payload.placeOfBirth = dateOfBirthMatch ? this.processLine(this.targets.placeOfBirth, placeOfBirth) : null;
 
     // Sex and blood type is on the same row
-    const wordsInSexRow = trimWhitespace(result.data.lines[2].text).split(' ');
-    // Just grab the last item in the row as the blood type. The corrector will handle it anyway.
-    const bloodType = wordsInSexRow[wordsInSexRow.length - 1];
-    // At the same time, just grab the first item in the row as sex.
-    payload.sex = wordsInSexRow[0] ? this.processLine(this.targets.sex, wordsInSexRow[0]) : null;
-    payload.bloodType = bloodType ? this.processLine(this.targets.bloodType, bloodType) : null;
+    const wordsInSexRow = correctStrayCharacter(result.data.lines[2].text)?.split(' ');
+    if (wordsInSexRow) {
+      // Just grab the last item in the row as the blood type. The corrector will handle it anyway.
+      const bloodType = wordsInSexRow[wordsInSexRow.length - 1];
+      // At the same time, just grab the first item in the row as sex.
+      payload.sex = wordsInSexRow[0] ? this.processLine(this.targets.sex, wordsInSexRow[0]) : null;
+      payload.bloodType = bloodType ? this.processLine(this.targets.bloodType, bloodType) : null;
+    }
 
     // We use ``index`` rather than ``bbox`` to mark the position of the targets. Create a mapping that maps an index to an ocr target.
     const indicesToTargetMap: Record<number, KTPCardOCRTarget> = {};

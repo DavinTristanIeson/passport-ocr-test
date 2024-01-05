@@ -36,15 +36,39 @@ export function correctAlphabet(options?: {
   }
 }
 
-export function correctEnums(enums: string[], options?: {
+export function correctEnums(possibleEnums: string[], options?: {
   exact?: boolean;
   history?: boolean;
+
+  spaceInsensitive?: boolean;
 }) {
+  const enums = possibleEnums.map(value => {
+    // Assume case insensitivity, everything is uppercase
+    value = value.toUpperCase();
+    // If space insensitive, eliminate all spaces
+    if (options?.spaceInsensitive) {
+      value = value.split(/\s+/).join('');
+    }
+    return value;
+  });
   return (value: string, history?: string[]) => {
     const candidates = (options?.history ?? true) && history ? combineUnique(enums, history) : enums;
-    const corrected = correctByHistory(trimWhitespace(value), candidates);
+    value = trimWhitespace(value.toUpperCase());
+    if (options?.spaceInsensitive) {
+      // trimWhitespace already removes whitespaces, so only split on regular spaces for space insensitivity.
+      value = value.split(' ').join('');
+    }
+
+    let corrected = correctByHistory(value, candidates);
     if (options?.exact && !candidates.find(x => x === corrected)) {
       return null;
+    }
+    // If space insensitive, recover original non-space-insensitive version
+    if (options?.spaceInsensitive) {
+      const enumIndex = enums.findIndex(enumValue => enumValue === corrected);
+      if (enumIndex !== -1) {
+        corrected = possibleEnums[enumIndex];
+      }
     }
     return corrected;
   }
@@ -58,7 +82,7 @@ export function correctStartsWith(expectedTag: string | string[]) {
     const candidate = closest(insensitiveTag, candidates);
 
     return distance(candidate, insensitiveTag) <= Math.ceil(candidate.length / 3)
-      ? actualValue.join('')
+      ? actualValue.join(' ')
       : null;
   }
 }
