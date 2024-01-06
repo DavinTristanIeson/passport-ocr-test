@@ -186,7 +186,6 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
       prevSymbolX1 = symbol.bbox.x1;
     }
 
-    // Words can be at most 6 characters away from each other
     const maxWordDistance = maxSymbolDistance * 6;
     let prevWordX1 = line.words[startIdx + 1].bbox.x1;
     for (let i = startIdx + 1; i < line.words.length; i++) {
@@ -299,11 +298,7 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
     let placeOfBirth = correctStrayCharacter(result.data.lines[1].text);
     if (placeOfBirth) {
       let dateOfBirthMatch = placeOfBirth.match(KTP_DATE_REGEX);
-      if (dateOfBirthMatch) {
-        // Usually, place of birth and date of birth is located side-by-side
-        placeOfBirth = placeOfBirth.slice(0, dateOfBirthMatch.index);
-      } else {
-        // But, place of birth and date of birth can be in different lines if place of birth is too long, so we need an extra check
+      if (!dateOfBirthMatch) {
         dateOfBirthMatch = trimWhitespace(result.data.lines[2].text).match(KTP_DATE_REGEX);
         if (dateOfBirthMatch) {
           result.data.lines.splice(2, 1);
@@ -311,9 +306,10 @@ export default class KTPCardOCR extends OCR<typeof KTPCardOCRTargets, SchedulerK
       }
 
       if (dateOfBirthMatch) {
+        placeOfBirth = placeOfBirth.slice(0, dateOfBirthMatch.index);
         payload.dateOfBirth = this.processLine(this.targets.dateOfBirth, dateOfBirthMatch[0]);
-        payload.placeOfBirth = this.processLine(this.targets.placeOfBirth, placeOfBirth);
       }
+      payload.placeOfBirth = this.processLine(this.targets.placeOfBirth, placeOfBirth);
     }
 
     // Sex and blood type is on the same row

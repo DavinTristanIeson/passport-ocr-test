@@ -91,7 +91,7 @@ function correctNIK(value: string) {
 }
 
 function correctNationality(value: string, history: string[]) {
-  if (value.includes("WNI") || distance(value, "WNI") <= 1) {
+  if (value.includes("WNI") || distance(value, "WNI") <= 1 || value.includes("WM")) {
     return "WNI";
   }
   return correctByHistory(value, history);

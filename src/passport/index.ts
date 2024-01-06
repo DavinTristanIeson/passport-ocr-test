@@ -447,15 +447,21 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets, Schedule
       // target.isDate ? this.readDateTarget(scheduler, target, imgUrl) : null
       Promise.resolve(),
     ]);
-    // Greedily grab the first line and hope for the best.
-    const line = result.data.lines[0];
+    // Greedily grab the line with the most confidence and hope for the best.
+    let line: Line | null = null, maxLineConfidence = 0;
+    for (let lineCandidate of result.data.lines) {
+      if (lineCandidate.confidence > maxLineConfidence) {
+        line = lineCandidate;
+        maxLineConfidence = lineCandidate.confidence;
+      }
+    }
     const processedLine = line ? this.processLine(target, line) : null;
 
     // Compare the confidence of the alternative result with this result.
     // if (altResult && altResult.confidence > line.confidence) {
     //   return altResult;
     // }
-    return processedLine ? { text: processedLine, confidence: line.confidence } : null;
+    return processedLine ? { text: processedLine, confidence: line!.confidence } : null;
   }
 
   async terminate() {
