@@ -28,7 +28,7 @@ interface PassportOCROptions extends OCROptions<typeof PassportOCRTargets> {
 enum SchedulerKeys {
   // number = "number",
   default = "default",
-  fast = "fast",
+  // fast = "fast",
 }
 enum PreprocessKeys {
   locator = "locator",
@@ -59,20 +59,8 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets, Schedule
         //     tessedit_char_whitelist: '0123456789'
         //   }
         // },
-        [SchedulerKeys.fast]: {
-          count: 3,
-          fast: true,
-          initOptions: {
-            load_freq_dawg: '0',
-            load_number_dawg: '0',
-            load_system_dawg: '0',
-          },
-          params: {
-            tessedit_char_blacklist: `,."'“:`
-          }
-        },
         [SchedulerKeys.default]: {
-          count: 3,
+          count: 6,
           initOptions: {
             load_freq_dawg: '0',
             load_number_dawg: '0',
@@ -119,7 +107,7 @@ export default class PassportOCR extends OCR<typeof PassportOCRTargets, Schedule
 
   /** Locate the section of the image which contain the relevant information. This function will mutate the canvas. */
   private async locateViewArea() {
-    const scheduler = await this.multiplexor.getScheduler(SchedulerKeys.fast);
+    const scheduler = await this.multiplexor.getScheduler(SchedulerKeys.default);
     const ctx = this.canvas.context;
     const oldImageData = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
     const p0 = await this.locateViewAreaTop(scheduler, ctx);

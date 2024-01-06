@@ -48,7 +48,7 @@ function grayscale(data: Uint8ClampedArray) {
     const diffRG = Math.abs(R - G);
     const diffRB = Math.abs(R - B);
     const diffGB = Math.abs(G - B);
-    const saturationFactor = R * (diffRG + diffRB) * 0.7 + G * (diffRG + diffGB) * 0.7 + B * (diffRB + diffGB) * 0.7;
+    const saturationFactor = R * (diffRG + diffRB) * 1.2 + G * (diffRG + diffGB) * 1.2 + B * (diffRB + diffGB) * 1.2;
     // No need to account for human eyesight with sensitivity factors, just divide by 3.
     // Brightness is necessary to differentiate desaturated dark and desaturated light.
     const brightnessFactor = (R + G + B) * 0.333333;
@@ -64,8 +64,8 @@ function grayscale(data: Uint8ClampedArray) {
 function binarize(data: Uint8ClampedArray): Uint8ClampedArray {
   const brightness = brightnessOf(data);
   const deviation = deviationOf(data, brightness);
-  const UPPER_THRESHOLD = brightness - deviation * 0.5;
-  const LOWER_THRESHOLD = brightness - deviation * 1.5;
+  const UPPER_THRESHOLD = brightness - deviation * 2;
+  const LOWER_THRESHOLD = brightness - deviation * 2.5;
   for (let i = 0; i < data.length; i++) {
     if (data[i] > UPPER_THRESHOLD) {
       data[i] = 255;

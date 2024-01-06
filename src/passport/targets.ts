@@ -121,7 +121,7 @@ const PassportOCRTargets = {
       x0: 0.000,
       y0: 0.230,
       x1: 0.820,
-      y1: 0.360,
+      y1: 0.380,
     },
     corrector: correctAlphabet({
       withHistory: false,
@@ -135,7 +135,7 @@ const PassportOCRTargets = {
       x0: 0.820,
       y0: 0.230,
       x1: 1,
-      y1: 0.360,
+      y1: 0.380,
     },
     corrector: correctSex,
   } as PassportOCRTarget,

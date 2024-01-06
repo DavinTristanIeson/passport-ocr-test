@@ -102,6 +102,32 @@ export default class TaskPool<T> {
     return results.filter(x => x !== undefined);
   }
 
+  /** Gets the first completed, non-ignored value from all tasks. */
+  async first(): Promise<T | null> {
+    const tracker: TaskPoolTaskTracker = {
+      index: 0,
+      target: this.options.count,
+      shortCircuit: false,
+    };
+    let result: T | null = null;
+    await new Promise<void>((resolve, reject) => {
+      let finished = 0;
+      for (let i = 0; i < this.options.limit; i++) {
+        this.runInner(tracker, (value, index) => {
+          result = value;
+          resolve();
+        }).then(() => {
+          finished++;
+          // If all tasks have finished without resolve
+          if (finished === this.options.limit && !result) {
+            reject();
+          }
+        }).catch(reject);
+      }
+    });
+    return result;
+  }
+
   /** Gets the latest value from all tasks.
    * 
    *  This will always resolve with the short-circuited value if a short circuit happens,

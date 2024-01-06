@@ -77,22 +77,22 @@ export default class OCRCanvas {
     const canvas = this.canvas;
     const ctx = this.context;
     const tempCanvas = document.createElement("canvas");
-    tempCanvas.width = canvas.width;
-    tempCanvas.height = canvas.height;
+    tempCanvas.width = box.width;
+    tempCanvas.height = box.height;
     const tempCtx = tempCanvas.getContext('2d', {
       willReadFrequently: true,
     })!;
+    tempCtx.fillStyle = "white";
+    tempCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
     tempCtx.translate(-box.left, -box.top);
     tempCtx.rotate(-angle);
     tempCtx.drawImage(canvas, 0, 0);
+    tempCtx.translate(box.left, box.top);
+    tempCtx.rotate(angle);
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(tempCanvas, 0, 0);
-    const cropped = ctx.getImageData(0, 0, box.width, box.height);
-    ctx.resetTransform();
     canvas.width = box.width;
     canvas.height = box.height;
-    ctx.putImageData(cropped, 0, 0);
+    ctx.drawImage(tempCanvas, 0, 0, box.width, box.height, 0, 0, box.width, box.height);
     return this;
   }
 

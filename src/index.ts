@@ -17,13 +17,13 @@ const temporaryCanvas = document.createElement("canvas");
 const history: PassportOCRHistory = {};
 
 const OCR = new PassportOCR({
-  // onProcessImage: (objectUrl) => {
-  //   const processedImage = document.createElement("img");
-  //   processedImage.src = objectUrl;
-  //   processedImage.alt = "Canvas";
-  //   ocrProcessedImageContainer.innerHTML = '';
-  //   ocrProcessedImageContainer.appendChild(processedImage);
-  // },
+  onProcessImage: (objectUrl) => {
+    const processedImage = document.createElement("img");
+    processedImage.src = objectUrl;
+    processedImage.alt = "Canvas";
+    ocrProcessedImageContainer.innerHTML = '';
+    ocrProcessedImageContainer.appendChild(processedImage);
+  },
   history,
 });
 
@@ -68,7 +68,9 @@ ocrExecuteButton.addEventListener("click", async () => {
     ocrErrorText.innerText = '';
   } catch (e: any) {
     ocrResultTextarea.value = '';
-    ocrErrorText.innerText = e.toString();
+    if (e) {
+      ocrErrorText.innerText = e.toString();
+    }
     console.error(e);
   } finally {
     ocrExecuteButton.disabled = false;
